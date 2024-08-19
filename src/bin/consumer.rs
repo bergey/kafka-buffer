@@ -7,7 +7,6 @@ use rdkafka::consumer::Consumer;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    env_logger::init();
     let broker_url = env::var("BROKER_URL").unwrap_or("localhost:9092".to_string());
     let topic = env::var("TOPIC").unwrap_or("buffer-topic".to_string());
 
