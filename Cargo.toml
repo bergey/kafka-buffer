@@ -6,6 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-sidekiq = "0.12.0"
-redis = "0.26.1"
+anyhow = "1.0.79"
 kafka = "0.10.0"
+redis = "0.26.1"
+sidekiq = "0.12.0"
