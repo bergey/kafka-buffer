@@ -1,24 +1,37 @@
-use kafka::consumer::{Consumer, FetchOffset, GroupOffsetStorage};
+use futures::TryStreamExt;
 use std::env;
 
-fn main() {
+use rdkafka::config::ClientConfig;
+use rdkafka::consumer::stream_consumer::StreamConsumer;
+use rdkafka::consumer::Consumer;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    env_logger::init();
     let broker_url = env::var("BROKER_URL").unwrap_or("localhost:9092".to_string());
     let topic = env::var("TOPIC").unwrap_or("buffer-topic".to_string());
 
-    let mut consumer = Consumer::from_hosts(vec![broker_url])
-        .with_topic_partitions(topic, &[0])
-        .with_fallback_offset(FetchOffset::Earliest)
-        .with_group("my-group".to_owned())
-        .with_offset_storage(Some(GroupOffsetStorage::Kafka))
-        .create()
-        .unwrap();
-    loop {
-        for ms in consumer.poll().unwrap().iter() {
-            for m in ms.messages() {
-                println!("{:?}", m);
-            }
-            consumer.consume_messageset(ms).unwrap();
+    // Create the `StreamConsumer`, to receive the messages from the topic in form of a `Stream`.
+    let consumer: StreamConsumer = ClientConfig::new()
+        .set("group.id", "kafka-buffer")
+        .set("bootstrap.servers", &broker_url)
+        .set("enable.partition.eof", "false")
+        .set("session.timeout.ms", "6000")
+        .set("enable.auto.commit", "false")
+        .create()?;
+    consumer.subscribe(&[&topic])?;
+
+    // Create the outer pipeline on the message stream.
+    let stream_processor = consumer.stream().try_for_each(|borrowed_message| {
+        async move {
+            // Process each message
+            println!("{:?}", borrowed_message);
+            Ok(())
         }
-        consumer.commit_consumed().unwrap();
-    }
+    });
+
+    println!("Starting event loop");
+    stream_processor.await?;
+    println!("Stream processing terminated");
+    Ok(())
 }
