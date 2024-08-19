@@ -8,5 +8,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.79"
 kafka = "0.10.0"
+rdkafka = "0.36.2"
+tokio = { version = "1.39.3", features = ["full"] }
 redis = "0.26.1"
 sidekiq = "0.12.0"
