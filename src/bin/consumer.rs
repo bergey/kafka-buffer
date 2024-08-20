@@ -7,13 +7,13 @@ use rdkafka::consumer::Consumer;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let broker_url = env::var("BROKER_URL").unwrap_or("localhost:9092".to_string());
+    let kafka_url = env::var("KAFKA_URL").unwrap_or("localhost:9092".to_string());
     let topic = env::var("TOPIC").unwrap_or("buffer-topic".to_string());
 
     // Create the `StreamConsumer`, to receive the messages from the topic in form of a `Stream`.
     let consumer: StreamConsumer = ClientConfig::new()
         .set("group.id", "kafka-buffer")
-        .set("bootstrap.servers", &broker_url)
+        .set("bootstrap.servers", &kafka_url)
         .set("enable.partition.eof", "false")
         .set("session.timeout.ms", "6000")
         .set("enable.auto.commit", "false")

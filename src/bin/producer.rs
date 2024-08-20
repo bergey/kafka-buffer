@@ -13,11 +13,10 @@ use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
-// use tokio::net::TcpStream;
 
 #[derive(Clone, Debug)]
 struct Config {
-    broker_url: String,
+    kafka_url: String,
     topic: String,
     request_max_size: usize,
 }
@@ -29,7 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .and_then(|s| s.parse().ok())
         .unwrap_or(SocketAddr::from(([0, 0, 0, 0], 3000)));
     let config: &'static Config = Box::leak(Box::new(Config {
-        broker_url: env::var("BROKER_URL").unwrap_or("localhost:9092".to_string()),
+        kafka_url: env::var("KAFKA_URL").unwrap_or("localhost:9092".to_string()),
         topic: env::var("TOPIC").unwrap_or("buffer-topic".to_string()),
         request_max_size: env::var("REQUEST_MAX_SIZE")
             .ok()
@@ -44,7 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 Ok(all) => {
                     // Create the `FutureProducer` to produce asynchronously.
                     let producer: FutureProducer = ClientConfig::new()
-                        .set("bootstrap.servers", &config.broker_url)
+                        .set("bootstrap.servers", &config.kafka_url)
                         .set("message.timeout.ms", "1000")
                         .create()?;
 
