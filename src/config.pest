@@ -1,0 +1,18 @@
+string = ${ "\"" ~ s_inner ~ "\"" }
+s_inner = @{ s_char* }
+s_char = { // https://pest.rs/book/examples/json.html
+    !("\"" | "\\") ~ ANY
+    | "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t")
+    | "\\" ~ ("u" ~ ASCII_HEX_DIGIT{4})
+}
+
+attribute_key = { "job-class" | "queue" | "topic" }
+attribute = { "(" ~ attribute_key ~ "." ~ string ~ ")" }
+attribute_set = { "'(" ~ attribute* ~ ")" }
+
+// TODO expression language
+
+rule = { "(" ~ string ~ attribute_set ~ ")" }
+config = { "(" ~ rule* ~  ")" }
+
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
