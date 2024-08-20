@@ -12,3 +12,5 @@ docker:
         done
     fi
 
+test:
+    <sample_data.txt xargs -I % curl http://localhost:3000 -d "'"%"'"
