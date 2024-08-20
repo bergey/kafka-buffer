@@ -1,5 +1,8 @@
+use kafka_buffer::observability;
+
 use futures::TryStreamExt;
 use std::env;
+use tracing::*;
 
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::stream_consumer::StreamConsumer;
@@ -9,6 +12,7 @@ use sidekiq::{create_redis_pool, Client, Job, JobOpts};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    observability::init()?;
     let kafka_url = env::var("KAFKA_URL").unwrap_or("localhost:9092".to_string());
     let topic = Box::leak(Box::new(env::var("TOPIC").unwrap_or("buffer-topic".to_string())));
 
@@ -40,7 +44,7 @@ async fn main() -> anyhow::Result<()> {
             });
         async {
             match r_body {
-                Err(err) => println!(
+                Err(err) => error!(
                     "could not decode body as utf-8, skipping topic={} err={}",
                     topic,
                     err
@@ -57,7 +61,7 @@ async fn main() -> anyhow::Result<()> {
                     };
                     match sidekiq_client.push_async(job).await {
                         Ok(_) => (),
-                        Err(err) => println!("Sidekiq push failed: {}", err),
+                        Err(err) => error!("Sidekiq push failed: {}", err),
                     }
                 }
             }
@@ -65,8 +69,8 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    println!("Starting event loop");
+    info!("Starting event loop");
     stream_processor.await?;
-    println!("Stream processing terminated");
+    warn!("Stream processing terminated");
     Ok(())
 }

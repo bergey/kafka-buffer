@@ -1,7 +1,10 @@
 /// read from stdin, send each line to Kafka
+use kafka_buffer::observability;
+
 use std::collections::HashMap;
 use std::env;
 use std::time::Duration;
+use tracing::*;
 
 use rdkafka::config::ClientConfig;
 use rdkafka::producer::{FutureProducer, FutureRecord};
@@ -24,6 +27,7 @@ struct Config {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    observability::init()?;
     let listen: SocketAddr = env::var("LISTEN")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -67,11 +71,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                                 Duration::from_secs(0),
                             );
                             match produce_future.await {
-                                Ok(delivery) => println!("Sent: {:?}", delivery),
-                                Err((e, _)) => println!("Error: {:?}", e),
+                                Ok(delivery) => debug!("Sent: {:?}", delivery),
+                                Err((e, _)) => error!("Error: {:?}", e),
                             }
                         }
-                        Err(err) => println!("error: {:?}", err),
+                        Err(err) => error!("error: {:?}", err),
                     }
                     Ok::<Response<Empty<Bytes>>, anyhow::Error>(
                         Response::new(Empty::<Bytes>::new()),
@@ -96,7 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .serve_connection(io, service_fn(write_to_kafka))
                 .await
             {
-                println!("Error serving connection: {:?}", err);
+                error!("Error serving connection: {:?}", err);
             }
         });
     }
