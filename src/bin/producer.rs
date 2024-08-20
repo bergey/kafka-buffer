@@ -51,7 +51,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let path = req.uri().path();
             match config.topics_map.get(path) {
                 None => Ok::<Response<Empty<Bytes>>, anyhow::Error>(
-                    Response::builder().status(StatusCode::NOT_FOUND).body(Empty::<Bytes>::new())?,
+                    Response::builder()
+                        .status(StatusCode::NOT_FOUND)
+                        .body(Empty::<Bytes>::new())?,
                 ),
                 Some(topic) => {
                     let body =

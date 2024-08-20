@@ -14,7 +14,9 @@ use sidekiq::{create_redis_pool, Client, Job, JobOpts};
 async fn main() -> anyhow::Result<()> {
     observability::init()?;
     let kafka_url = env::var("KAFKA_URL").unwrap_or("localhost:9092".to_string());
-    let topic = Box::leak(Box::new(env::var("TOPIC").unwrap_or("buffer-topic".to_string())));
+    let topic = Box::leak(Box::new(
+        env::var("TOPIC").unwrap_or("buffer-topic".to_string()),
+    ));
 
     // Create the `StreamConsumer`, to receive the messages from the topic in form of a `Stream`.
     let consumer: StreamConsumer = ClientConfig::new()
@@ -46,8 +48,7 @@ async fn main() -> anyhow::Result<()> {
             match r_body {
                 Err(err) => error!(
                     "could not decode body as utf-8, skipping topic={} err={}",
-                    topic,
-                    err
+                    topic, err
                 ),
                 Ok(body) => {
                     let job = Job {
