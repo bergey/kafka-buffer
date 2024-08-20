@@ -1,6 +1,7 @@
 kafka: docker
     docker run -d -p 9092:9092 apache/kafka-native:3.8.0
-    kafka_2.13-3.8.0/bin/kafka-topics.sh --create --topic  buffer-topic --bootstrap-server localhost:9092
+    kafka_2.13-3.8.0/bin/kafka-topics.sh --create --topic  foo --bootstrap-server localhost:9092
+    kafka_2.13-3.8.0/bin/kafka-topics.sh --create --topic  bar --bootstrap-server localhost:9092
 
 docker:
     #!/usr/bin/env bash 
