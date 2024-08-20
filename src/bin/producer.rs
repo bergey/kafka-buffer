@@ -1,10 +1,14 @@
 /// read from stdin, send each line to Kafka
 use kafka_buffer::observability;
+use kafka_buffer::observability::hist_time_since;
 
 use std::collections::HashMap;
 use std::env;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::*;
+#[macro_use]
+extern crate lazy_static;
+use prometheus::{self, register_histogram, register_int_counter, Histogram, IntCounter};
 
 use rdkafka::config::ClientConfig;
 use rdkafka::producer::{FutureProducer, FutureRecord};
@@ -23,6 +27,21 @@ struct Config {
     kafka_url: String,
     request_max_size: usize,
     topics_map: HashMap<String, String>, // url path -> kafka topic
+}
+
+lazy_static! {
+    static ref HTTP_REQUEST: IntCounter =
+        register_int_counter!("http_request", "HTTP requests started").unwrap();
+    // TODO use Labels?
+    static ref HTTP_200: IntCounter =
+        register_int_counter!("http_200", "HTTP 200 responses sent").unwrap();
+    static ref HTTP_4xx: IntCounter =
+        register_int_counter!("http_4xx", "HTTP 4xx responses sent").unwrap();
+    static ref HTTP_5xx: IntCounter =
+        register_int_counter!("http_5xx", "HTTP 5xx responses sent").unwrap();
+    // TODO better buckets
+    static ref KAFKA_DURATION_S: Histogram =
+        register_histogram!("kafka_duration_s", "duration of write requests to Kafka").unwrap();
 }
 
 #[tokio::main]
@@ -50,11 +69,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         async {
             let path = req.uri().path();
             match config.topics_map.get(path) {
-                None => Ok::<Response<Empty<Bytes>>, anyhow::Error>(
-                    Response::builder()
-                        .status(StatusCode::NOT_FOUND)
-                        .body(Empty::<Bytes>::new())?,
-                ),
+                None => {
+                    HTTP_4xx.inc();
+                    Ok::<Response<Empty<Bytes>>, anyhow::Error>(
+                        Response::builder()
+                            .status(StatusCode::NOT_FOUND)
+                            .body(Empty::<Bytes>::new())?,
+                    )
+                }
                 Some(topic) => {
                     let body =
                         http_body_util::Limited::new(req.into_body(), config.request_max_size);
@@ -68,17 +90,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
                             let mut v: Vec<u8> = Vec::new();
                             v.extend(all.to_bytes().as_ref());
+                            let start = Instant::now();
                             let produce_future = producer.send(
                                 FutureRecord::<(), [u8]>::to(topic).payload(&v),
                                 Duration::from_secs(0),
                             );
-                            match produce_future.await {
+                            let r_delivery = produce_future.await;
+                            hist_time_since(&KAFKA_DURATION_S, start);
+                            match r_delivery {
                                 Ok(delivery) => debug!("Sent: {:?}", delivery),
                                 Err((e, _)) => error!("Error: {:?}", e),
                             }
                         }
                         Err(err) => error!("error: {:?}", err),
                     }
+                    HTTP_200.inc();
                     Ok::<Response<Empty<Bytes>>, anyhow::Error>(
                         Response::new(Empty::<Bytes>::new()),
                     )
@@ -91,6 +117,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     loop {
         let (stream, _) = listener.accept().await?;
+        HTTP_REQUEST.inc();
 
         // Use an adapter to access something implementing `tokio::io` traits as if they implement
         // `hyper::rt` IO traits.

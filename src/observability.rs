@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::time::Instant;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 pub fn init() -> Result<()> {
@@ -14,4 +15,17 @@ pub fn init() -> Result<()> {
             .init();
     }
     Ok(())
+}
+
+pub fn hist_time_since(hist: &prometheus::Histogram, start: Instant) {
+    let elapsed = Instant::now() - start;
+    hist.observe(elapsed.as_secs_f64());
+}
+
+pub async fn prometheus_metrics() -> String {
+    let metrics = prometheus::gather();
+    let encoder = prometheus::TextEncoder::new();
+    encoder
+        .encode_to_string(&metrics)
+        .expect("failed to encode metrics")
 }

@@ -1,14 +1,27 @@
-use kafka_buffer::observability;
+use kafka_buffer::observability::{self, hist_time_since};
 
 use futures::TryStreamExt;
 use std::env;
+use std::time::Instant;
 use tracing::*;
+#[macro_use]
+extern crate lazy_static;
+use prometheus::{self, register_histogram, register_int_counter, Histogram, IntCounter};
 
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::stream_consumer::StreamConsumer;
 use rdkafka::consumer::Consumer;
 use rdkafka::Message;
 use sidekiq::{create_redis_pool, Client, Job, JobOpts};
+
+lazy_static! {
+    static ref KAFKA_MESSAGE_RECEIVED: IntCounter =
+        register_int_counter!("kafka_message_received", "number of messages read").unwrap();
+    static ref JOBS_WRITTEN: IntCounter =
+        register_int_counter!("jobs_written", "number of Sidekiq jobs written to Redis").unwrap();
+    static ref REDIS_DURATION_S: Histogram =
+        register_histogram!("redis_duration_s", "duration of writes to Redis queues").unwrap();
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -39,6 +52,7 @@ async fn main() -> anyhow::Result<()> {
     };
     // Create the outer pipeline on the message stream.
     let stream_processor = consumer.stream().try_for_each(|borrowed_message| {
+        KAFKA_MESSAGE_RECEIVED.inc();
         let r_body = borrowed_message
             .payload()
             .map_or(Ok("".to_string()), |bytes| {
@@ -60,8 +74,11 @@ async fn main() -> anyhow::Result<()> {
                         created_at: job_opts.created_at,
                         enqueued_at: job_opts.enqueued_at,
                     };
-                    match sidekiq_client.push_async(job).await {
-                        Ok(_) => (),
+                    let start = Instant::now();
+                    let r_push = sidekiq_client.push_async(job).await;
+                    hist_time_since(&REDIS_DURATION_S, start);
+                    match r_push {
+                        Ok(_) => JOBS_WRITTEN.inc(),
                         Err(err) => error!("Sidekiq push failed: {}", err),
                     }
                 }
