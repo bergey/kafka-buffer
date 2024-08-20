@@ -13,6 +13,36 @@ fn print_parse_string(s: &str) {
     println!("{:?}", ConfigParser::parse(Rule::string, s));
 }
 
+fn validate(s: &str) -> Vec<String> {
+    let mut errors = Vec::new();
+    match ConfigParser::parse(Rule::config, s) {
+        Err(err) => errors.push(format!("{:?} {} {}", err.line_col, err.variant.message(), err.line())),
+        Ok(config) => {
+            for rule in config.into_inner() {
+                match rule.as_rule() {
+                    Rule::rule => {
+                        for term in rule.into_inner() {
+                            match term.as_rule() {
+                                Rule::string => (),
+                                Rule::attribute_set => {
+                                    let mut job_class = 0;
+                                    let mut queue = 0;
+                                    let mut topic = 0;
+                                    for attr in term {
+                                        match att.
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+            }
+        }
+    }
+   errors 
+}
+
 fn main() {
     print_parse_string("\"hello\"");
 
@@ -25,7 +55,6 @@ fn main() {
             (queue . "foo_queue")
             (topic . "foo_topic")
             )"#);
-    
 
     let unsuccessful_parse = ConfigParser::parse(Rule::string, "this is not a number");
     println!("{:?}", unsuccessful_parse);
