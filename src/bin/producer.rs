@@ -64,6 +64,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             topics
         },
     }));
+    let metrics_address = env::var("METRICS_ADDRESS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(SocketAddr::from(([0, 0, 0, 0], 9000)));
 
     let write_to_kafka = move |req: Request<hyper::body::Incoming>| {
         async {
@@ -113,24 +117,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     };
 
-    let listener = { TcpListener::bind(listen).await? };
+    let tcp_listener = { TcpListener::bind(listen).await? };
+    let metrics_listener = TcpListener::bind(metrics_address).await?;
 
     loop {
-        let (stream, _) = listener.accept().await?;
-        HTTP_REQUEST.inc();
+        tokio::select! {
+                r_stream = tcp_listener.accept() => match r_stream {
+                    Err(err) => {
+                        error!("http error: {}", err);
+                        break;
+                    }
+                    Ok((stream, _)) => {
+                        HTTP_REQUEST.inc();
 
-        // Use an adapter to access something implementing `tokio::io` traits as if they implement
-        // `hyper::rt` IO traits.
-        let io = TokioIo::new(stream);
+                        // Use an adapter to access something implementing `tokio::io` traits as if they implement
+                        // `hyper::rt` IO traits.
+                        let io = TokioIo::new(stream);
 
-        // Spawn a tokio task to serve multiple connections concurrently
-        tokio::task::spawn(async move {
-            if let Err(err) = http1::Builder::new()
-                .serve_connection(io, service_fn(write_to_kafka))
-                .await
-            {
-                error!("Error serving connection: {:?}", err);
+                        // Spawn a tokio task to serve multiple connections concurrently
+                        tokio::task::spawn(async move {
+                            if let Err(err) = http1::Builder::new()
+                                .serve_connection(io, service_fn(write_to_kafka))
+                                .await
+                            {
+                                error!("Error serving connection: {:?}", err);
+                            }
+                        });
+                }
+            },
+            r_stream = metrics_listener.accept() => match r_stream {
+                Err(err) => {
+                    error!("http metrics error: {}", err);
+                    break;
+                }
+                Ok((stream, _)) => {
+                    HTTP_REQUEST.inc();
+
+                    // Use an adapter to access something implementing `tokio::io` traits as if they implement
+                    // `hyper::rt` IO traits.
+                    let io = TokioIo::new(stream);
+
+                    // Spawn a tokio task to serve multiple connections concurrently
+                    tokio::task::spawn(async move {
+                        if let Err(err) = http1::Builder::new()
+                            .serve_connection(io, service_fn(write_to_kafka))
+                            .await
+                        {
+                            error!("Error serving connection: {:?}", err);
+                        }
+                    });
             }
-        });
+        }
+        }
     }
+    Ok(())
 }

@@ -4,7 +4,7 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use http_body_util::Full;
 use hyper::body::Bytes;
-use hyper::{Request, Response};
+use hyper::{Request, Response, StatusCode};
 
 pub fn init() -> Result<()> {
     if std::env::var("LOG_FORMAT") == Ok("pretty".to_string()) {
@@ -26,9 +26,21 @@ pub fn hist_time_since(hist: &prometheus::Histogram, start: Instant) {
     hist.observe(elapsed.as_secs_f64());
 }
 
-pub async fn prometheus_metrics(_req: Request<hyper::body::Incoming>) -> Result<Response<Full<Bytes>>> {
-    let metrics = prometheus::gather();
-    let encoder = prometheus::TextEncoder::new();
-    let s = encoder.encode_to_string(&metrics)?;
-    Ok(Response::new(Full::<Bytes>::from(s)))
+pub async fn prometheus_metrics(
+    req: Request<hyper::body::Incoming>,
+) -> anyhow::Result<Response<Full<Bytes>>> {
+    match req.uri().path() {
+        "/metrics" => {
+            let metrics = prometheus::gather();
+            let encoder = prometheus::TextEncoder::new();
+            let s = encoder.encode_to_string(&metrics)?;
+            Ok(Response::new(Full::<Bytes>::from(s)))
+        }
+        _ =>
+                    Ok::<Response<Full<Bytes>>, anyhow::Error>(
+                        Response::builder()
+                            .status(StatusCode::NOT_FOUND)
+                            .body(Full::<Bytes>::from(""))?,
+                    )
+    }
 }

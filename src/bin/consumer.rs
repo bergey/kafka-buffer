@@ -103,7 +103,7 @@ async fn main() -> anyhow::Result<()> {
 
     let redis_pool = create_redis_pool()?;
     let sidekiq_client = Client::new(redis_pool, Default::default());
-    let listener = TcpListener::bind(metrics_address).await?;
+    let metrics_listener = TcpListener::bind(metrics_address).await?;
 
     // Create the outer pipeline on the message stream.
     info!("Starting event loop");
@@ -119,7 +119,7 @@ async fn main() -> anyhow::Result<()> {
                     Err(_) => break,
                 }
             },
-            r_stream = listener.accept() => match r_stream {
+            r_stream = metrics_listener.accept() => match r_stream {
                 Err(err) => {
                     error!("http error: {}", err);
                     break;
