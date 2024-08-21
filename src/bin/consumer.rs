@@ -1,6 +1,7 @@
 use kafka_buffer::observability::{self, hist_time_since};
 use rdkafka::message::BorrowedMessage;
 
+use anyhow::Context;
 use prometheus::{self, register_histogram, register_int_counter, Histogram, IntCounter};
 use std::env;
 use std::time::Instant;
@@ -52,6 +53,7 @@ async fn write_sidekiq_job<'a>(
             Ok(())
         }
         Ok(body) => {
+            debug!("received body={}", body);
             let job = Job {
                 class: class.clone(),
                 args: vec![sidekiq::Value::String(body)],
@@ -83,8 +85,9 @@ async fn write_sidekiq_job<'a>(
 async fn main() -> anyhow::Result<()> {
     observability::init()?;
     let kafka_url = env::var("KAFKA_URL").unwrap_or("localhost:9092".to_string());
+    // TODO multiple topics
     let topic = Box::leak(Box::new(
-        env::var("TOPIC").unwrap_or("buffer-topic".to_string()),
+        env::var("TOPIC").unwrap_or("foo".to_string()),
     ));
     let metrics_address = env::var("METRICS_ADDRESS")
         .ok()
@@ -98,12 +101,12 @@ async fn main() -> anyhow::Result<()> {
         .set("enable.partition.eof", "false")
         .set("session.timeout.ms", "6000")
         .set("enable.auto.commit", "false")
-        .create()?;
+        .create().context("kafka consumer")?;
     consumer.subscribe(&[&topic])?;
 
-    let redis_pool = create_redis_pool()?;
+    let redis_pool = create_redis_pool().context("redis_pool")?;
     let sidekiq_client = Client::new(redis_pool, Default::default());
-    let metrics_listener = TcpListener::bind(metrics_address).await?;
+    let metrics_listener = TcpListener::bind(metrics_address).await.context("metrics_listener")?;
 
     // Create the outer pipeline on the message stream.
     info!("Starting event loop");

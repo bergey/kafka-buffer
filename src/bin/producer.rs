@@ -2,6 +2,7 @@
 use kafka_buffer::observability;
 use kafka_buffer::observability::hist_time_since;
 
+use anyhow::Context;
 use std::collections::HashMap;
 use std::env;
 use std::time::{Duration, Instant};
@@ -59,8 +60,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .unwrap_or(2 ^ 20),
         topics_map: {
             let mut topics = HashMap::new();
-            topics.insert("/foo".to_string(), "buffer-foo".to_string());
-            topics.insert("/bar".to_string(), "buffer-bar".to_string());
+            topics.insert("/foo".to_string(), "foo".to_string());
+            topics.insert("/bar".to_string(), "bar".to_string());
             topics
         },
     }));
@@ -109,6 +110,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         Err(err) => error!("error: {:?}", err),
                     }
                     HTTP_200.inc();
+                    debug!("served request topic={}", topic);
                     Ok::<Response<Empty<Bytes>>, anyhow::Error>(
                         Response::new(Empty::<Bytes>::new()),
                     )
@@ -117,8 +119,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     };
 
-    let tcp_listener = { TcpListener::bind(listen).await? };
-    let metrics_listener = TcpListener::bind(metrics_address).await?;
+    let tcp_listener = TcpListener::bind(listen).await.context("tcp_listener")?;
+    let metrics_listener = TcpListener::bind(metrics_address).await.context("metrics_listener")?;
 
     loop {
         tokio::select! {
@@ -151,8 +153,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     break;
                 }
                 Ok((stream, _)) => {
-                    HTTP_REQUEST.inc();
-
                     // Use an adapter to access something implementing `tokio::io` traits as if they implement
                     // `hyper::rt` IO traits.
                     let io = TokioIo::new(stream);
@@ -160,7 +160,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     // Spawn a tokio task to serve multiple connections concurrently
                     tokio::task::spawn(async move {
                         if let Err(err) = http1::Builder::new()
-                            .serve_connection(io, service_fn(write_to_kafka))
+                            .serve_connection(io, service_fn(observability::prometheus_metrics))
                             .await
                         {
                             error!("Error serving connection: {:?}", err);

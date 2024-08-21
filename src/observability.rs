@@ -1,5 +1,6 @@
 use anyhow::Result;
 use std::time::Instant;
+use tracing::*;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use http_body_util::Full;
@@ -36,11 +37,13 @@ pub async fn prometheus_metrics(
             let s = encoder.encode_to_string(&metrics)?;
             Ok(Response::new(Full::<Bytes>::from(s)))
         }
-        _ =>
-                    Ok::<Response<Full<Bytes>>, anyhow::Error>(
-                        Response::builder()
-                            .status(StatusCode::NOT_FOUND)
-                            .body(Full::<Bytes>::from(""))?,
-                    )
+        path => {
+            warn!("expected /metrics request to {}", path);
+            Ok::<Response<Full<Bytes>>, anyhow::Error>(
+                Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .body(Full::<Bytes>::from(""))?,
+            )
+        }
     }
 }
