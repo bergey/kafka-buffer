@@ -1,20 +1,25 @@
 use kafka_buffer::observability::{self, hist_time_since};
 use rdkafka::message::BorrowedMessage;
 
-// use std::borrow::Borrow;
+use prometheus::{self, register_histogram, register_int_counter, Histogram, IntCounter};
 use std::env;
-use std::net::SocketAddr;
 use std::time::Instant;
 use tracing::*;
-#[macro_use]
-extern crate lazy_static;
-use prometheus::{self, register_histogram, register_int_counter, Histogram, IntCounter};
 
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::stream_consumer::StreamConsumer;
 use rdkafka::consumer::{CommitMode, Consumer};
 use rdkafka::Message;
 use sidekiq::{create_redis_pool, Client, Job, JobOpts};
+
+use hyper::server::conn::http1;
+use hyper::service::service_fn;
+use hyper_util::rt::TokioIo;
+use std::net::SocketAddr;
+use tokio::net::TcpListener;
+
+#[macro_use]
+extern crate lazy_static;
 
 lazy_static! {
     static ref KAFKA_MESSAGE_RECEIVED: IntCounter =
@@ -98,21 +103,40 @@ async fn main() -> anyhow::Result<()> {
 
     let redis_pool = create_redis_pool()?;
     let sidekiq_client = Client::new(redis_pool, Default::default());
+    let listener = TcpListener::bind(metrics_address).await?;
 
     // Create the outer pipeline on the message stream.
     info!("Starting event loop");
     loop {
-        let r_message = consumer.recv().await;
-        match r_message {
-            Err(err) => {
-                error!("kafka read error: {}", err);
-                break;
+        tokio::select! {
+            r_message = consumer.recv() => match r_message {
+                Err(err) => {
+                    error!("kafka read error: {}", err);
+                    break;
+                }
+                Ok(message) => match write_sidekiq_job(&consumer, &sidekiq_client, message).await {
+                    Ok(()) => (),
+                    Err(_) => break,
+                }
+            },
+            r_stream = listener.accept() => match r_stream {
+                Err(err) => {
+                    error!("http error: {}", err);
+                    break;
+                }
+                Ok((stream, _)) => {
+                    let io = TokioIo::new(stream);
+                    tokio::task::spawn(async move {
+                        if let Err(err) = http1::Builder::new()
+                            .serve_connection(io, service_fn(observability::prometheus_metrics))
+                            .await
+                        {
+                            error!("Error serving connection: {:?}", err);
+                        }
+                    });
+                }
             }
-            Ok(message) => match write_sidekiq_job(&consumer, &sidekiq_client, message).await {
-                Ok(()) => (),
-                Err(_) => break,
-            }
-        }
+        };
     }
     warn!("Stream processing terminated");
     Ok(())
