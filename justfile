@@ -24,3 +24,10 @@ producer:
 
 consumer:
    LOG_FORMAT=pretty RUST_LOG=debug METRICS_ADDRESS=0.0.0.0:9093 cargo run --bin consumer
+
+# pop a job off the sidekiq queue
+dequeue:
+    redis-cli --raw rpop {{queue}}
+    redis-cli llen {{queue}}
+
+queue := "queue:kafka-job-queue"
