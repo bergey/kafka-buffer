@@ -9,8 +9,10 @@ s_char = { // https://pest.rs/book/examples/json.html
 ident = @{ ident_char+ }
 ident_char = { !("(" | ")" | "[" | "]" | "{" | "}" | "\"" | "," | "'" | "`" | ";" | "#" | "|" | "\\" | WHITESPACE ) ~ ANY }
 
-pair = { "(" ~ ident ~ "." ~ value ~ ")" }  // any value as RHS?
+pair = { "(" ~ value ~ "." ~ value ~ ")" }
 value = _{ ident | string | pair | list }
 list = { "(" ~ value* ~ ")" }
+config = _{ COMMENT* ~ value* }
 
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+COMMENT = _{ ";" ~ (!("\n" | "\r") ~ ANY)* }
