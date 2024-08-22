@@ -6,13 +6,11 @@ s_char = { // https://pest.rs/book/examples/json.html
     | "\\" ~ ("u" ~ ASCII_HEX_DIGIT{4})
 }
 
-attribute_key = { "job-class" | "queue" | "topic" }
-attribute = { "(" ~ attribute_key ~ "." ~ string ~ ")" }
-attribute_set = { "'(" ~ attribute* ~ ")" }
+ident = @{ ident_char+ }
+ident_char = { !("(" | ")" | "[" | "]" | "{" | "}" | "\"" | "," | "'" | "`" | ";" | "#" | "|" | "\\" | WHITESPACE ) ~ ANY }
 
-// TODO expression language
-
-rule = { "(" ~ string ~ attribute_set ~ ")" }
-config = { "(" ~ rule* ~  ")" }
+pair = { "(" ~ ident ~ "." ~ value ~ ")" }  // any value as RHS?
+value = _{ ident | string | pair | list }
+list = { "(" ~ value* ~ ")" }
 
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
