@@ -53,7 +53,7 @@ async fn write_sidekiq_job<'a>(
             Ok(())
         }
         Ok(body) => {
-            debug!("received body={}", body);
+            debug!("received topic={} body={}", message.topic(), body);
             let job = Job {
                 class: route.job_class.clone(),
                 args: vec![sidekiq::Value::String(body)],
@@ -102,6 +102,7 @@ async fn main() -> anyhow::Result<()> {
         .create()
         .context("kafka consumer")?;
     let topics: Vec<&str> = topics_map.keys().map(|x| &**x).collect();
+    info!("subscribing to {:?}", topics);
     consumer.subscribe(&topics)?;
 
     let redis_pool = create_redis_pool().context("redis_pool")?;

@@ -124,7 +124,7 @@ pub fn parse(s: &str) -> Result<Routes, Vec<String>> {
                         }
                         match key.as_str() {
                             "job-class" => match class {
-                                None => class = Some(value.as_str().to_owned()),
+                                None => class = value.into_inner().next().map(|v| v.as_str().to_owned()),
                                 Some(_) => {
                                     let (line, col) = key.line_col();
                                     errors.push(format!(
@@ -134,7 +134,7 @@ pub fn parse(s: &str) -> Result<Routes, Vec<String>> {
                                 }
                             },
                             "queue" => match queue {
-                                None => queue = Some(value.as_str().to_owned()),
+                                None => queue = value.into_inner().next().map(|v| v.as_str().to_owned()),
                                 Some(_) => {
                                     let (line, col) = key.line_col();
                                     errors
@@ -142,7 +142,7 @@ pub fn parse(s: &str) -> Result<Routes, Vec<String>> {
                                 }
                             },
                             "topic" => match topic {
-                                None => topic = Some(value.as_str().to_owned()),
+                                None => topic = value.into_inner().next().map(|v| v.as_str().to_owned()),
                                 Some(_) => {
                                     let (line, col) = key.line_col();
                                     errors

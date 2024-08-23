@@ -1,7 +1,7 @@
 kafka: docker
-    docker run -d -p 9092:9092 apache/kafka-native:3.8.0
-    kafka_2.13-3.8.0/bin/kafka-topics.sh --create --topic  foo --bootstrap-server localhost:9092
-    kafka_2.13-3.8.0/bin/kafka-topics.sh --create --topic  bar --bootstrap-server localhost:9092
+    docker run -d -p 9092:9092 apache/kafka-native:3.8.0 || true
+    kafka_2.13-3.8.0/bin/kafka-topics.sh --create --topic  foo_topic --bootstrap-server localhost:9092 || true
+    kafka_2.13-3.8.0/bin/kafka-topics.sh --create --topic  bar_queue_name__Bar --bootstrap-server localhost:9092 || true
 
 redis: docker
     docker run -d -p 6379:6379 redis
@@ -16,8 +16,8 @@ docker:
         done
     fi
 
-test:
-    <sample_data.txt xargs -I % curl -v http://localhost:3000/foo -d "'"%"'"
+test path='foo':
+    <sample_data.txt xargs -I % curl -v http://localhost:3000/{{path}} -d %
 
 producer:
     LOG_FORMAT=pretty RUST_LOG=debug METRICS_ADDRESS=0.0.0.0:9090 cargo run --bin producer
@@ -26,8 +26,6 @@ consumer:
    LOG_FORMAT=pretty RUST_LOG=debug METRICS_ADDRESS=0.0.0.0:9093 cargo run --bin consumer
 
 # pop a job off the sidekiq queue
-dequeue:
-    redis-cli --raw rpop {{queue}}
-    redis-cli llen {{queue}}
-
-queue := "queue:kafka-job-queue"
+dequeue queue='foo_queue':
+    redis-cli --raw rpop queue:{{queue}}
+    redis-cli llen queue:{{queue}}
