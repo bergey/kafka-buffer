@@ -16,6 +16,24 @@ pub struct Route {
 #[derive(Clone, Debug)]
 pub struct Routes(pub HashMap<String, Route>);
 
+impl Routes {
+    pub fn only_topics(self) -> HashMap<String, String> {
+        let mut ret = HashMap::new();
+        for (path, route) in self.0 {
+            ret.insert(path, route.topic);
+        }
+        ret
+    }
+
+    pub fn by_topic(self) -> HashMap<String, Route> {
+        let mut ret = HashMap::new();
+        for route in self.0.into_values() {
+            ret.insert(route.topic.clone(), route);
+        }
+        ret
+    }
+}
+
 pub const DEFAULT_CONFIG_FILE: &str = "kafka_buffer.config";
 
 /// the Vec will never be empty

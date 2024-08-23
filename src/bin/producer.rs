@@ -4,6 +4,7 @@ use kafka_buffer::observability;
 use kafka_buffer::observability::hist_time_since;
 
 use anyhow::Context;
+use std::collections::HashMap;
 use std::env;
 use std::time::{Duration, Instant};
 use tracing::*;
@@ -27,7 +28,7 @@ use tokio::net::TcpListener;
 struct Config {
     kafka_url: String,
     request_max_size: usize,
-    topics_map: Routes,
+    topics_map: HashMap<String, String>,
 }
 
 lazy_static! {
@@ -58,7 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .unwrap_or(SocketAddr::from(([0, 0, 0, 0], 9000)));
 
     let config_file_name = env::var("CONFIG_FILE").unwrap_or(DEFAULT_CONFIG_FILE.to_string());
-    let topics_map = parse_from_file(&config_file_name);
+    let topics_map = parse_from_file(&config_file_name).only_topics();
     let config: &'static Config = Box::leak(Box::new(Config {
         kafka_url: env::var("KAFKA_URL").unwrap_or("localhost:9092".to_string()),
         request_max_size: env::var("REQUEST_MAX_SIZE")
@@ -71,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let write_to_kafka = move |req: Request<hyper::body::Incoming>| {
         async {
             let path = req.uri().path();
-            match config.topics_map.0.get(path) {
+            match config.topics_map.get(path) {
                 None => {
                     HTTP_4xx.inc();
                     Ok::<Response<Empty<Bytes>>, anyhow::Error>(
@@ -80,7 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                             .body(Empty::<Bytes>::new())?,
                     )
                 }
-                Some(route) => {
+                Some(topic) => {
                     let body =
                         http_body_util::Limited::new(req.into_body(), config.request_max_size);
                     match body.collect().await {
@@ -95,7 +96,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                             v.extend(all.to_bytes().as_ref());
                             let start = Instant::now();
                             let produce_future = producer.send(
-                                FutureRecord::<(), [u8]>::to(&route.topic).payload(&v),
+                                FutureRecord::<(), [u8]>::to(&topic).payload(&v),
                                 Duration::from_secs(0),
                             );
                             let r_delivery = produce_future.await;
@@ -108,7 +109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         Err(err) => error!("error: {:?}", err),
                     }
                     HTTP_200.inc();
-                    debug!("served request topic={}", route.topic);
+                    debug!("served request topic={}", topic);
                     Ok::<Response<Empty<Bytes>>, anyhow::Error>(
                         Response::new(Empty::<Bytes>::new()),
                     )
@@ -118,7 +119,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
 
     let tcp_listener = TcpListener::bind(listen).await.context("tcp_listener")?;
-    let metrics_listener = TcpListener::bind(metrics_address).await.context("metrics_listener")?;
+    let metrics_listener = TcpListener::bind(metrics_address)
+        .await
+        .context("metrics_listener")?;
 
     loop {
         tokio::select! {

@@ -1,3 +1,4 @@
+use kafka_buffer::config::*;
 use kafka_buffer::observability::{self, hist_time_since};
 use rdkafka::message::BorrowedMessage;
 
@@ -34,12 +35,11 @@ lazy_static! {
 async fn write_sidekiq_job<'a>(
     consumer: &StreamConsumer,
     sidekiq_client: &Client,
+    route: &Route,
     message: BorrowedMessage<'a>,
 ) -> anyhow::Result<()> {
-    // TODO look up in config file
-    let class = "kafka-buffer".to_string();
     let job_opts = JobOpts {
-        queue: "kafka-job-queue".to_string(),
+        queue: route.queue.clone(),
         ..Default::default()
     };
 
@@ -55,7 +55,7 @@ async fn write_sidekiq_job<'a>(
         Ok(body) => {
             debug!("received body={}", body);
             let job = Job {
-                class: class.clone(),
+                class: route.job_class.clone(),
                 args: vec![sidekiq::Value::String(body)],
                 retry: job_opts.retry,
                 queue: job_opts.queue.clone(),
@@ -85,14 +85,12 @@ async fn write_sidekiq_job<'a>(
 async fn main() -> anyhow::Result<()> {
     observability::init()?;
     let kafka_url = env::var("KAFKA_URL").unwrap_or("localhost:9092".to_string());
-    // TODO multiple topics
-    let topic = Box::leak(Box::new(
-        env::var("TOPIC").unwrap_or("foo".to_string()),
-    ));
     let metrics_address = env::var("METRICS_ADDRESS")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(SocketAddr::from(([0, 0, 0, 0], 9000)));
+    let config_file_name = env::var("CONFIG_FILE").unwrap_or(DEFAULT_CONFIG_FILE.to_string());
+    let topics_map = parse_from_file(&config_file_name).by_topic();
 
     // Create the `StreamConsumer`, to receive the messages from the topic in form of a `Stream`.
     let consumer: StreamConsumer = ClientConfig::new()
@@ -101,12 +99,16 @@ async fn main() -> anyhow::Result<()> {
         .set("enable.partition.eof", "false")
         .set("session.timeout.ms", "6000")
         .set("enable.auto.commit", "false")
-        .create().context("kafka consumer")?;
-    consumer.subscribe(&[&topic])?;
+        .create()
+        .context("kafka consumer")?;
+    let topics: Vec<&str> = topics_map.keys().map(|x| &**x).collect();
+    consumer.subscribe(&topics)?;
 
     let redis_pool = create_redis_pool().context("redis_pool")?;
     let sidekiq_client = Client::new(redis_pool, Default::default());
-    let metrics_listener = TcpListener::bind(metrics_address).await.context("metrics_listener")?;
+    let metrics_listener = TcpListener::bind(metrics_address)
+        .await
+        .context("metrics_listener")?;
 
     // Create the outer pipeline on the message stream.
     info!("Starting event loop");
@@ -117,9 +119,12 @@ async fn main() -> anyhow::Result<()> {
                     error!("kafka read error: {}", err);
                     break;
                 }
-                Ok(message) => match write_sidekiq_job(&consumer, &sidekiq_client, message).await {
-                    Ok(()) => (),
-                    Err(_) => break,
+                Ok(message) => {
+                    let route = topics_map.get(message.topic()).expect("message came from a topic we subscribed to");
+                    match write_sidekiq_job(&consumer, &sidekiq_client, &route, message).await {
+                        Ok(()) => (),
+                        Err(_) => break,
+                    }
                 }
             },
             r_stream = metrics_listener.accept() => match r_stream {
