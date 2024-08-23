@@ -1,9 +1,9 @@
 /// read from stdin, send each line to Kafka
+use kafka_buffer::config::*;
 use kafka_buffer::observability;
 use kafka_buffer::observability::hist_time_since;
 
 use anyhow::Context;
-use std::collections::HashMap;
 use std::env;
 use std::time::{Duration, Instant};
 use tracing::*;
@@ -27,7 +27,7 @@ use tokio::net::TcpListener;
 struct Config {
     kafka_url: String,
     request_max_size: usize,
-    topics_map: HashMap<String, String>, // url path -> kafka topic
+    topics_map: Routes,
 }
 
 lazy_static! {
@@ -52,28 +52,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(SocketAddr::from(([0, 0, 0, 0], 3000)));
+    let metrics_address = env::var("METRICS_ADDRESS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(SocketAddr::from(([0, 0, 0, 0], 9000)));
+
+    let config_file_name = env::var("CONFIG_FILE").unwrap_or(DEFAULT_CONFIG_FILE.to_string());
+    let topics_map = parse_from_file(&config_file_name);
     let config: &'static Config = Box::leak(Box::new(Config {
         kafka_url: env::var("KAFKA_URL").unwrap_or("localhost:9092".to_string()),
         request_max_size: env::var("REQUEST_MAX_SIZE")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(2 ^ 20),
-        topics_map: {
-            let mut topics = HashMap::new();
-            topics.insert("/foo".to_string(), "foo".to_string());
-            topics.insert("/bar".to_string(), "bar".to_string());
-            topics
-        },
+        topics_map,
     }));
-    let metrics_address = env::var("METRICS_ADDRESS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(SocketAddr::from(([0, 0, 0, 0], 9000)));
 
     let write_to_kafka = move |req: Request<hyper::body::Incoming>| {
         async {
             let path = req.uri().path();
-            match config.topics_map.get(path) {
+            match config.topics_map.0.get(path) {
                 None => {
                     HTTP_4xx.inc();
                     Ok::<Response<Empty<Bytes>>, anyhow::Error>(
@@ -82,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                             .body(Empty::<Bytes>::new())?,
                     )
                 }
-                Some(topic) => {
+                Some(route) => {
                     let body =
                         http_body_util::Limited::new(req.into_body(), config.request_max_size);
                     match body.collect().await {
@@ -97,7 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                             v.extend(all.to_bytes().as_ref());
                             let start = Instant::now();
                             let produce_future = producer.send(
-                                FutureRecord::<(), [u8]>::to(topic).payload(&v),
+                                FutureRecord::<(), [u8]>::to(&route.topic).payload(&v),
                                 Duration::from_secs(0),
                             );
                             let r_delivery = produce_future.await;
@@ -110,7 +108,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         Err(err) => error!("error: {:?}", err),
                     }
                     HTTP_200.inc();
-                    debug!("served request topic={}", topic);
+                    debug!("served request topic={}", route.topic);
                     Ok::<Response<Empty<Bytes>>, anyhow::Error>(
                         Response::new(Empty::<Bytes>::new()),
                     )
