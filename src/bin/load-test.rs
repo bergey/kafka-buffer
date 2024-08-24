@@ -2,8 +2,8 @@
 extern crate lazy_static;
 
 use clap::Parser;
-use http_body_util::Full;
 use http::uri::Uri;
+use http_body_util::Full;
 use hyper::body::Bytes;
 use hyper::client::conn::http1::SendRequest;
 use hyper::Request;
@@ -40,9 +40,8 @@ struct Cli {
     /// time in seconds to wait after sending messages before exit
     sleep: f64,
 
-    #[arg(long, default_value = "sample_data.txt")]
-    /// file with one line per message to send
-    data: String,
+    #[arg(long, default_value_t = 100)]
+    payload_size_bytes: usize,
 }
 
 lazy_static! {
@@ -53,7 +52,8 @@ lazy_static! {
     )
     .unwrap();
     static ref RECEIVED_COUNT: IntCounter =
-        prometheus::register_int_counter!("received_count", "number of responses received").unwrap();
+        prometheus::register_int_counter!("received_count", "number of responses received")
+            .unwrap();
     static ref SENT_COUNT: IntCounter =
         prometheus::register_int_counter!("sent_count", "number of lines sent to server").unwrap();
 }
@@ -99,22 +99,9 @@ async fn main() -> anyhow::Result<()> {
 
     info!("starting to send webhooks");
     let start_time = Instant::now();
-    let messages: &'static Vec<String> = {
-        let mut messages = Vec::new();
-        for line in std::fs::read_to_string(&cli.data)?.lines() {
-            messages.push(line.to_owned());
-        }
-        Box::leak(Box::new(messages))
-    };
     let mut joins = Vec::new();
     for (i, conn) in conns.into_iter().enumerate() {
-        joins.push(spawn(one_client(
-            cli.clone(),
-            conn,
-            i,
-            &messages,
-            start_time,
-        )));
+        joins.push(spawn(one_client(cli.clone(), conn, i, start_time)));
     }
     for j in joins {
         let _ = j.await;
@@ -169,13 +156,22 @@ async fn one_client(
     cli: Cli,
     mut conn: SendRequest<Full<Bytes>>,
     user_id: usize,
-    messages: &Vec<String>,
     start_time: Instant,
 ) -> anyhow::Result<()> {
-    let think_distribution: Option<Exp<f64>> = cli.think_time_s.map(|λ| Exp::new(1.0/λ)).transpose()?;
+    let think_distribution: Option<Exp<f64>> =
+        cli.think_time_s.map(|λ| Exp::new(1.0 / λ)).transpose()?;
     let mut deadline = Instant::now();
     let authority = cli.url.authority().expect("url has hostname");
-    let mut msg_i = user_id * messages.len() % (cli.num_users as usize) % messages.len();
+    let message: Vec<u8> = {
+        let mut message = Vec::with_capacity(cli.payload_size_bytes);
+        let bytes = (user_id as u64).to_be_bytes();
+        for _ in 0..cli.payload_size_bytes {
+            // < 2^16 connections, because of IPv6 limits
+            message.push(bytes[7]);
+            message.push(bytes[6]);
+        }
+        message
+    };
 
     loop {
         // Create an HTTP request with an empty body and a HOST header
@@ -183,8 +179,7 @@ async fn one_client(
             .method("POST")
             .uri(&cli.url)
             .header(hyper::header::HOST, authority.as_str())
-            .body(Full::<Bytes>::from(messages[msg_i].clone()))?;
-        msg_i = (msg_i + 1) % messages.len();
+            .body(Full::<Bytes>::from(message.clone()))?;
 
         SENT_COUNT.inc();
 
