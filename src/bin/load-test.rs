@@ -94,12 +94,11 @@ async fn main() -> anyhow::Result<()> {
         {
             // approximate, we may have opened more if they complet out of order
             info!("opened {} connections", conns.len());
-        } else {
-            debug!("opened {} connections", conns.len());
         }
     }
 
     info!("starting to send webhooks");
+    let start_time = Instant::now();
     let messages: &'static Vec<String> = {
         let mut messages = Vec::new();
         for line in std::fs::read_to_string(&cli.data)?.lines() {
@@ -114,6 +113,7 @@ async fn main() -> anyhow::Result<()> {
             conn,
             i,
             &messages,
+            start_time,
         )));
     }
     for j in joins {
@@ -172,12 +172,8 @@ async fn one_client(
     mut conn: SendRequest<Full<Bytes>>,
     user_id: usize,
     messages: &Vec<String>,
+    start_time: Instant,
 ) -> anyhow::Result<()> {
-    let print_every_n = match cli.think_time_s {
-        None => 100,
-        Some(s) => std::cmp::max(cli.num_users, (cli.num_users as f64 / s) as u64),
-    };
-
     let think_distribution: Option<Exp<f64>> = cli.think_time_s.map(|λ| Exp::new(1.0/λ)).transpose()?;
     let mut deadline = Instant::now();
     let authority = cli.url.authority().expect("url has hostname");
@@ -195,12 +191,13 @@ async fn one_client(
         SENT_COUNT.inc();
 
         let i = SENT_COUNT.get();
-        if i % print_every_n == 0 && i > 0 {
+        if i % 5000 == 0 && i > 0 {
             info!("sent {i} messages so far");
         }
         if let Some(n) = cli.stop_after {
             if i == n - 1 {
-                info!("stopping after sending {n} messages");
+                let elapsed = Instant::now().duration_since(start_time).as_secs();
+                warn!("stopping after sending {n} messages in {elapsed} s");
                 report_metrics_and_exit(0);
             }
         }
@@ -214,7 +211,8 @@ async fn one_client(
         // read until deadline or we've drained the queue
         match think_distribution {
             Some(think) => {
-                deadline += Duration::from_secs_f64(think.sample(&mut thread_rng()));
+                let think_s = think.sample(&mut thread_rng());
+                deadline += Duration::from_secs_f64(think_s);
                 sleep_until(deadline).await;
             }
             None => (),
