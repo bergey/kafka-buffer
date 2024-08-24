@@ -1,12 +1,14 @@
-kafka: docker
+docker: kafka redis
+
+kafka: docker-start
     docker run -d -p 9092:9092 apache/kafka-native:3.8.0 || true
     kafka_2.13-3.8.0/bin/kafka-topics.sh --create --topic  foo_topic --bootstrap-server localhost:9092 || true
     kafka_2.13-3.8.0/bin/kafka-topics.sh --create --topic  bar_queue_name__Bar --bootstrap-server localhost:9092 || true
 
-redis: docker
+redis: docker-start
     docker run -d -p 6379:6379 redis
 
-docker:
+docker-start:
     #!/usr/bin/env bash
     if ! docker system info &> /dev/null; then
         open -a docker
@@ -36,4 +38,4 @@ load-bearing kafka='127.0.0.1':
     # 10 log files each 1MB
     TOKIO_WORKER_THREADS=1 RUST_LOG=info METRICS_ADDRESS=0.0.0.0:9090 \
         cargo run --release --bin producer \
-        | multilog s1000000 n10 ./producer-log &
+        | multilog s1000000 n10 ./producer-log
