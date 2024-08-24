@@ -69,51 +69,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         topics_map,
     }));
 
-    let write_to_kafka = move |req: Request<hyper::body::Incoming>| {
-        async {
-            let path = req.uri().path();
-            match config.topics_map.get(path) {
-                None => {
-                    HTTP_4xx.inc();
-                    Ok::<Response<Empty<Bytes>>, anyhow::Error>(
-                        Response::builder()
-                            .status(StatusCode::NOT_FOUND)
-                            .body(Empty::<Bytes>::new())?,
-                    )
-                }
-                Some(topic) => {
-                    let body =
-                        http_body_util::Limited::new(req.into_body(), config.request_max_size);
-                    match body.collect().await {
-                        Ok(all) => {
-                            // Create the `FutureProducer` to produce asynchronously.
-                            let producer: FutureProducer = ClientConfig::new()
-                                .set("bootstrap.servers", &config.kafka_url)
-                                .set("message.timeout.ms", "1000")
-                                .create()?;
+    // Create the `FutureProducer` to produce asynchronously.
+    let producer: &'static FutureProducer = Box::leak(Box::new(
+        ClientConfig::new()
+            .set("bootstrap.servers", &config.kafka_url)
+            .set("message.timeout.ms", "1000")
+            .create()?,
+    ));
 
-                            let mut v: Vec<u8> = Vec::new();
-                            v.extend(all.to_bytes().as_ref());
-                            let start = Instant::now();
-                            let produce_future = producer.send(
-                                FutureRecord::<(), [u8]>::to(&topic).payload(&v),
-                                Duration::from_secs(0),
-                            );
-                            let r_delivery = produce_future.await;
-                            hist_time_since(&KAFKA_DURATION_S, start);
-                            match r_delivery {
-                                Ok(delivery) => debug!("Sent: {:?}", delivery),
-                                Err((e, _)) => error!("Error: {:?}", e),
-                            }
+    let write_to_kafka = |req: Request<hyper::body::Incoming>| async {
+        let path = req.uri().path();
+        match config.topics_map.get(path) {
+            None => {
+                HTTP_4xx.inc();
+                Ok::<Response<Empty<Bytes>>, anyhow::Error>(
+                    Response::builder()
+                        .status(StatusCode::NOT_FOUND)
+                        .body(Empty::<Bytes>::new())?,
+                )
+            }
+            Some(topic) => {
+                let body = http_body_util::Limited::new(req.into_body(), config.request_max_size);
+                match body.collect().await {
+                    Ok(all) => {
+                        let mut v: Vec<u8> = Vec::new();
+                        v.extend(all.to_bytes().as_ref());
+                        let start = Instant::now();
+                        let produce_future = producer.send(
+                            FutureRecord::<(), [u8]>::to(&topic).payload(&v),
+                            Duration::from_secs(0),
+                        );
+                        let r_delivery = produce_future.await;
+                        hist_time_since(&KAFKA_DURATION_S, start);
+                        match r_delivery {
+                            Ok(delivery) => debug!("Sent: {:?}", delivery),
+                            Err((e, _)) => error!("Error: {:?}", e),
                         }
-                        Err(err) => error!("error: {:?}", err),
                     }
-                    HTTP_200.inc();
-                    debug!("served request topic={}", topic);
-                    Ok::<Response<Empty<Bytes>>, anyhow::Error>(
-                        Response::new(Empty::<Bytes>::new()),
-                    )
+                    Err(err) => error!("error: {:?}", err),
                 }
+                HTTP_200.inc();
+                debug!("served request topic={}", topic);
+                Ok::<Response<Empty<Bytes>>, anyhow::Error>(Response::new(Empty::<Bytes>::new()))
             }
         }
     };
@@ -140,7 +137,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         // Spawn a tokio task to serve multiple connections concurrently
                         tokio::task::spawn(async move {
                             if let Err(err) = http1::Builder::new()
-                                .serve_connection(io, service_fn(write_to_kafka))
+                                .serve_connection(io, service_fn(&write_to_kafka))
                                 .await
                             {
                                 error!("Error serving connection: {:?}", err);
@@ -167,8 +164,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                             error!("Error serving connection: {:?}", err);
                         }
                     });
+                }
             }
-        }
         }
     }
     Ok(())
