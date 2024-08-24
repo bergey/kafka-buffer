@@ -29,3 +29,11 @@ consumer:
 dequeue queue='foo_queue':
     redis-cli --raw rpop queue:{{queue}}
     redis-cli llen queue:{{queue}}
+
+# run producer with args suitable for load test
+load-bearing kafka='127.0.0.1':
+    #!/usr/bin/env bash
+    # 10 log files each 1MB
+    TOKIO_WORKER_THREADS=1 RUST_LOG=info METRICS_ADDRESS=0.0.0.0:9090 \
+        cargo run --release --bin producer \
+        | multilog s1000000 n10 ./producer-log &
