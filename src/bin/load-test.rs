@@ -178,7 +178,7 @@ async fn one_client(
         Some(s) => std::cmp::max(cli.num_users, (cli.num_users as f64 / s) as u64),
     };
 
-    let think_distribution: Option<Exp<f64>> = cli.think_time_s.map(|λ| Exp::new(λ)).transpose()?;
+    let think_distribution: Option<Exp<f64>> = cli.think_time_s.map(|λ| Exp::new(1.0/λ)).transpose()?;
     let mut deadline = Instant::now();
     let authority = cli.url.authority().expect("url has hostname");
     let mut msg_i = user_id * messages.len() % (cli.num_users as usize) % messages.len();
