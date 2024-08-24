@@ -43,7 +43,7 @@ lazy_static! {
         register_int_counter!("http_5xx", "HTTP 5xx responses sent").unwrap();
     static ref KAFKA_DURATION_S: Histogram =
         register_histogram!("kafka_duration_s", "duration of write requests to Kafka",
-                            vec![0.005, 0.006, 0.007, 0.008, 0.009, 0.010, 0.032, 0.100, 0.316, 1.0]
+                            vec![0.005, 0.0075, 0.010, 0.032, 0.100, 0.316, 1.0]
 ).unwrap();
 }
 
@@ -83,15 +83,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         match config.topics_map.get(path) {
             None => {
                 HTTP_4xx.inc();
-                Ok::<Response<Empty<Bytes>>, anyhow::Error>(
-                    Response::builder()
-                        .status(StatusCode::NOT_FOUND)
-                        .body(Empty::<Bytes>::new())?,
-                )
+                // I'd like to know which unknown URLs are requested, but not flood our logs
+                empty_http_response(StatusCode::NOT_FOUND)
             }
             Some(topic) => {
                 let body = http_body_util::Limited::new(req.into_body(), config.request_max_size);
                 match body.collect().await {
+                    Err(err) => {
+                        error!("http error: {:?}", err);
+                        HTTP_4xx.inc();
+                        empty_http_response(StatusCode::BAD_REQUEST)
+                    }
                     Ok(all) => {
                         let mut v: Vec<u8> = Vec::new();
                         v.extend(all.to_bytes().as_ref());
@@ -103,30 +105,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         let r_delivery = produce_future.await;
                         hist_time_since(&KAFKA_DURATION_S, start);
                         match r_delivery {
-                            Ok(delivery) => debug!("Sent: {:?}", delivery),
-                            Err((e, _)) => error!("Error: {:?}", e),
+                            Err((e, _)) => {
+                                error!("Kafka Error: {:?}", e);
+                                HTTP_5xx.inc();
+                                empty_http_response(StatusCode::SERVICE_UNAVAILABLE)
+                            }
+                            Ok((partition, offset)) => {
+                                debug!("served request topic={topic} partition={partition} offset={offset}");
+                                HTTP_200.inc();
+                                empty_http_response(StatusCode::OK)
+                            }
                         }
                     }
-                    Err(err) => error!("error: {:?}", err),
                 }
-                HTTP_200.inc();
-                debug!("served request topic={}", topic);
-                Ok::<Response<Empty<Bytes>>, anyhow::Error>(Response::new(Empty::<Bytes>::new()))
             }
         }
     };
 
-    let tcp_listener = TcpListener::bind(listen).await.context(format!("tcp_listener {}", listen))?;
+    let tcp_listener = TcpListener::bind(listen)
+        .await
+        .context(format!("tcp_listener {}", listen))?;
     let metrics_listener = TcpListener::bind(metrics_address)
         .await
-        .context("metrics_listener")?;
+        .context(format!("metrics_listener {}", metrics_address))?;
 
     loop {
         tokio::select! {
                 r_stream = tcp_listener.accept() => match r_stream {
                     Err(err) => {
-                        error!("http error: {}", err);
-                        break;
+                        error!("fatal http error: {}", err);
+                        std::process::exit(101);
                     }
                     Ok((stream, _)) => {
                         HTTP_REQUEST.inc();
@@ -148,8 +156,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             },
             r_stream = metrics_listener.accept() => match r_stream {
                 Err(err) => {
-                    error!("http metrics error: {}", err);
-                    break;
+                    error!("fatal http metrics error: {}", err);
+                    std::process::exit(102);
                 }
                 Ok((stream, _)) => {
                     // Use an adapter to access something implementing `tokio::io` traits as if they implement
@@ -169,5 +177,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
         }
     }
-    Ok(())
+}
+
+fn empty_http_response(status_code: StatusCode) -> Result<Response<Empty<Bytes>>, anyhow::Error> {
+    Ok(Response::builder()
+        .status(status_code)
+        .body(Empty::<Bytes>::new())?)
 }
