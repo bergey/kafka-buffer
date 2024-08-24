@@ -48,7 +48,8 @@ struct Cli {
 lazy_static! {
     static ref ROUND_TRIP_TIME: Histogram = prometheus::register_histogram!(
         "round_trip_time",
-        "client-side time to persist one new line to server"
+        "client-side time to persist one new line to server",
+        vec![0.005, 0.006, 0.007, 0.008, 0.009, 0.010, 0.032, 0.100, 0.316, 1.0]
     )
     .unwrap();
     static ref RECEIVED_COUNT: IntCounter =
@@ -173,14 +174,14 @@ async fn one_client(
     messages: &Vec<String>,
 ) -> anyhow::Result<()> {
     let print_every_n = match cli.think_time_s {
-        None => cli.num_users * 10,
+        None => 100,
         Some(s) => std::cmp::max(cli.num_users, (cli.num_users as f64 / s) as u64),
     };
 
     let think_distribution: Option<Exp<f64>> = cli.think_time_s.map(|λ| Exp::new(λ)).transpose()?;
     let mut deadline = Instant::now();
     let authority = cli.url.authority().expect("url has hostname");
-    let mut msg_i = user_id * messages.len() % (cli.num_users as usize);
+    let mut msg_i = user_id * messages.len() % (cli.num_users as usize) % messages.len();
 
     loop {
         // Create an HTTP request with an empty body and a HOST header
@@ -189,7 +190,7 @@ async fn one_client(
             .uri(&cli.url)
             .header(hyper::header::HOST, authority.as_str())
             .body(Full::<Bytes>::from(messages[msg_i].clone()))?;
-        msg_i += 1;
+        msg_i = (msg_i + 1) % messages.len();
 
         SENT_COUNT.inc();
 

@@ -41,9 +41,10 @@ lazy_static! {
         register_int_counter!("http_4xx", "HTTP 4xx responses sent").unwrap();
     static ref HTTP_5xx: IntCounter =
         register_int_counter!("http_5xx", "HTTP 5xx responses sent").unwrap();
-    // TODO better buckets
     static ref KAFKA_DURATION_S: Histogram =
-        register_histogram!("kafka_duration_s", "duration of write requests to Kafka").unwrap();
+        register_histogram!("kafka_duration_s", "duration of write requests to Kafka",
+                            vec![0.005, 0.006, 0.007, 0.008, 0.009, 0.010, 0.032, 0.100, 0.316, 1.0]
+).unwrap();
 }
 
 #[tokio::main]
