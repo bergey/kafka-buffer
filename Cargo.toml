@@ -9,8 +9,10 @@ edition = "2021"
 anyhow = "1.0.79"
 clap = { version = "4.4.11", features = ["derive"] }
 futures = "0.3.30"
+futures-util = "0.3.25"
+http = "1.1.0"
 http-body-util = "0.1.2"
-hyper = "1.4.1"
+hyper = { version = "1.4.1", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }
 lazy_static = "1.4"
 pest = "2.7"

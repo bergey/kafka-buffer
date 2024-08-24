@@ -917,6 +917,8 @@ dependencies = [
  "anyhow",
  "clap",
  "futures",
+ "futures-util",
+ "http",
  "http-body-util",
  "hyper",
  "hyper-util",
