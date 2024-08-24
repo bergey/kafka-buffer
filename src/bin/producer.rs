@@ -6,7 +6,7 @@ use kafka_buffer::observability::hist_time_since;
 use anyhow::Context;
 use std::collections::HashMap;
 use std::env;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tracing::*;
 #[macro_use]
 extern crate lazy_static;
@@ -98,22 +98,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         let mut v: Vec<u8> = Vec::new();
                         v.extend(all.to_bytes().as_ref());
                         let start = Instant::now();
-                        let produce_future = producer.send(
-                            FutureRecord::<(), [u8]>::to(&topic).payload(&v),
-                            Duration::from_secs(0),
-                        );
-                        let r_delivery = produce_future.await;
-                        hist_time_since(&KAFKA_DURATION_S, start);
-                        match r_delivery {
-                            Err((e, _)) => {
-                                error!("Kafka Error: {:?}", e);
-                                HTTP_5xx.inc();
-                                empty_http_response(StatusCode::SERVICE_UNAVAILABLE)
+                        match producer.send_result(FutureRecord::<(), [u8]>::to(&topic).payload(&v))
+                        {
+                            Err(err) => {
+                                warn!("could not enqueue in rdkafka: {:?}", err);
+                                HTTP_4xx.inc();
+                               empty_http_response(StatusCode::TOO_MANY_REQUESTS)
                             }
-                            Ok((partition, offset)) => {
-                                debug!("served request topic={topic} partition={partition} offset={offset}");
-                                HTTP_200.inc();
-                                empty_http_response(StatusCode::OK)
+                            Ok(produce_future) => {
+                                let r_delivery = produce_future.await;
+                                hist_time_since(&KAFKA_DURATION_S, start);
+                                match r_delivery {
+                                    Err(_cancelled) => {
+                                        warn!("kafka message canceled");
+                                        HTTP_5xx.inc();
+                                        empty_http_response(StatusCode::INTERNAL_SERVER_ERROR)
+                                    }
+                                    Ok(Err((e, _))) => {
+                                        error!("Kafka Error: {:?}", e);
+                                        HTTP_5xx.inc();
+                                        empty_http_response(StatusCode::SERVICE_UNAVAILABLE)
+                                    }
+                                    Ok(Ok((partition, offset))) => {
+                                        debug!("served request topic={topic} partition={partition} offset={offset}");
+                                        HTTP_200.inc();
+                                        empty_http_response(StatusCode::OK)
+                                    }
+                                }
                             }
                         }
                     }
