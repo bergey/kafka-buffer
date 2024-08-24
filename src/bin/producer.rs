@@ -116,7 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     };
 
-    let tcp_listener = TcpListener::bind(listen).await.context("tcp_listener")?;
+    let tcp_listener = TcpListener::bind(listen).await.context(format!("tcp_listener {}", listen))?;
     let metrics_listener = TcpListener::bind(metrics_address)
         .await
         .context("metrics_listener")?;

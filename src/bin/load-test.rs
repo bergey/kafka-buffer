@@ -157,14 +157,12 @@ async fn connect_once(address: &str) -> anyhow::Result<SendRequest<Full<Bytes>>>
     Ok(sender)
 }
 
-fn report_metrics_and_exit(exit_code: i32) {
+fn report_metrics() {
     let metrics = prometheus::gather();
     let report = prometheus::TextEncoder::new()
         .encode_to_string(&metrics)
         .expect("failed to encode metrics");
     info!("{report}");
-    // TODO graceful WS close
-    std::process::exit(exit_code);
 }
 
 async fn one_client(
@@ -198,7 +196,11 @@ async fn one_client(
             if i == n - 1 {
                 let elapsed = Instant::now().duration_since(start_time).as_secs();
                 warn!("stopping after sending {n} messages in {elapsed} s");
-                report_metrics_and_exit(0);
+                report_metrics();
+                break Ok(());
+            }
+            if i >= n {
+                break Ok(());
             }
         }
 

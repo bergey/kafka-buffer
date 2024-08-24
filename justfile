@@ -36,6 +36,6 @@ dequeue queue='foo_queue':
 load-bearing kafka='127.0.0.1':
     #!/usr/bin/env bash
     # 10 log files each 1MB
-    TOKIO_WORKER_THREADS=1 RUST_LOG=info METRICS_ADDRESS=0.0.0.0:9090 \
+    TOKIO_WORKER_THREADS=1 RUST_LOG=info METRICS_ADDRESS=0.0.0.0:3002 LISTEN=0.0.0.0:3001 \
         cargo run --release --bin producer \
         | multilog s1000000 n10 ./producer-log
