@@ -75,6 +75,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         ClientConfig::new()
             .set("bootstrap.servers", &config.kafka_url)
             .set("message.timeout.ms", "1000")
+            .set("connections.max.idle.ms", "30000")
+            .set("linger.ms", "10")
+            .set("compression.codec", "lz4")
             .create()?,
     ));
 
