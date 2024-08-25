@@ -6,9 +6,9 @@ use http::uri::Uri;
 use http_body_util::Full;
 use hyper::body::Bytes;
 use hyper::client::conn::http1::SendRequest;
-use hyper::Request;
+use hyper::{Request, StatusCode};
 use hyper_util::rt::TokioIo;
-use prometheus::{self, Histogram, IntCounter};
+use prometheus::{self, labels, Histogram, IntCounter, IntCounterVec};
 use rand::prelude::*;
 use rand_distr::{Distribution, Exp};
 use tokio::net::TcpStream;
@@ -51,11 +51,13 @@ lazy_static! {
         vec![0.005, 0.006, 0.007, 0.008, 0.009, 0.010, 0.032, 0.100, 0.316, 1.0]
     )
     .unwrap();
-    static ref RECEIVED_COUNT: IntCounter =
-        prometheus::register_int_counter!("received_count", "number of responses received")
-            .unwrap();
     static ref SENT_COUNT: IntCounter =
         prometheus::register_int_counter!("sent_count", "number of lines sent to server").unwrap();
+    static ref HTTP_RECEIVED: IntCounterVec =
+        prometheus::register_int_counter_vec!("http_received", "number of responses received, by status code", &["status"])
+            .unwrap();
+    static ref TCP_ERROR_COUNT: IntCounter =
+        prometheus::register_int_counter!("tcp_error_count", "number of TCP (not HTTP) errors").unwrap();
 }
 
 #[tokio::main]
@@ -164,11 +166,11 @@ async fn one_client(
     let authority = cli.url.authority().expect("url has hostname");
     let message: Vec<u8> = {
         let mut message = Vec::with_capacity(cli.payload_size_bytes);
-        let bytes = (user_id as u64).to_be_bytes();
-        for _ in 0..cli.payload_size_bytes {
-            // < 2^16 connections, because of IPv6 limits
-            message.push(bytes[7]);
-            message.push(bytes[6]);
+        // < 2^16 connections, because of IPv6 limits
+        let bytes = (user_id as u16).to_be_bytes();
+        for _ in 0..cli.payload_size_bytes / 2 {
+            message.push(bytes[0]);
+            message.push(bytes[1]);
         }
         message
     };
@@ -200,8 +202,15 @@ async fn one_client(
         }
 
         let request_time = Instant::now();
-        let _ = conn.send_request(req).await?;
-        RECEIVED_COUNT.inc();
+        match conn.send_request(req).await {
+            Ok(response) => {
+                let status: StatusCode = response.status();
+                HTTP_RECEIVED.with(&labels!{"status" => status.as_str()}).inc();
+            },
+            Err(tcp_err) => {
+                warn!("TCP error: {tcp_err}")
+            }
+        }
         let elapsed = Instant::now().duration_since(request_time);
         ROUND_TRIP_TIME.observe(elapsed.as_secs_f64());
 
