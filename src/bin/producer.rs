@@ -2,10 +2,7 @@
 use kafka_buffer::config::*;
 use kafka_buffer::observability;
 use kafka_buffer::observability::hist_time_since;
-pub mod buffered_http_request_capnp {
-    include!(concat!(env!("OUT_DIR"), "/buffered_http_request_capnp.rs"));
-}
-use crate::buffered_http_request_capnp::buffered_request;
+use kafka_buffer::buffered_http_request_capnp::buffered_request;
 
 use anyhow::Context;
 use std::env;

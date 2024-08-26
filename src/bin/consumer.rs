@@ -1,12 +1,15 @@
 use kafka_buffer::config::*;
 use kafka_buffer::observability::{self, hist_time_since};
 use rdkafka::message::BorrowedMessage;
+use kafka_buffer::buffered_http_request_capnp::buffered_request;
 
-use anyhow::Context;
+use serde_json::map::Map;
+use anyhow::{anyhow, Context};
 use prometheus::{self, register_histogram, register_int_counter, Histogram, IntCounter};
 use std::env;
 use std::time::Instant;
 use tracing::*;
+use capnp::message::ReaderOptions;
 
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::stream_consumer::StreamConsumer;
@@ -44,19 +47,16 @@ async fn write_sidekiq_job<'a>(
     };
 
     KAFKA_MESSAGE_RECEIVED.inc();
-    let r_body = message.payload().map_or(Ok("".to_string()), |bytes| {
-        String::from_utf8(bytes.to_vec())
-    });
-    match r_body {
+    match decode_capnp_message(message.payload()) {
         Err(err) => {
-            error!("could not decode body as utf-8, skipping err={}", err);
+            error!("skipping topic={} offset={} could not decode payload: {}", message.topic(), message.offset(), err);
             Ok(())
         }
-        Ok(body) => {
-            debug!("received topic={} body={}", message.topic(), body);
+        Ok(job_args) => {
+            debug!("received topic={} job_args={:?}", message.topic(), job_args);
             let job = Job {
                 class: route.job_class.clone(),
-                args: vec![sidekiq::Value::String(body)],
+                args: job_args,
                 retry: job_opts.retry,
                 queue: job_opts.queue.clone(),
                 jid: job_opts.jid.clone(),
@@ -149,4 +149,23 @@ async fn main() -> anyhow::Result<()> {
     }
     warn!("Stream processing terminated");
     Ok(())
+}
+
+fn decode_capnp_message(o_bytes: Option<&[u8]>) -> anyhow::Result<Vec<sidekiq::Value>> {
+    let mut job_args = Vec::new();
+    let bytes = o_bytes.ok_or(anyhow!("kafka message has no payload"))?;
+    let reader = capnp::serialize::read_message(bytes, ReaderOptions::new())?;
+    // let typed_reader = TypedReader::<_, buffered_request::Owned>::new(reader);
+    // let buf_req = typed_reader.get()?;
+    let buf_req = reader.get_root::<buffered_request::Reader>()?;
+    let body = buf_req.get_body()?;
+    job_args.push(sidekiq::Value::String(String::from_utf8(body.to_vec())?));
+    let mut headers = Map::new();
+    for h in buf_req.get_headers()? {
+        let name = h.get_name()?.to_str()?.to_owned();
+        let value = String::from_utf8(h.get_value()?.to_vec())?;
+        headers.insert(name, serde_json::Value::String(value));
+    }
+    job_args.push(sidekiq::Value::Object(headers));
+    Ok(job_args)
 }
