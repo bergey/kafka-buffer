@@ -91,7 +91,7 @@ async fn main() -> anyhow::Result<()> {
     let mut conns = Vec::new();
     for j in joins {
         conns.push(j.await?);
-        if conns.len() as u64 % (std::cmp::max(1, cli.num_users / 10)) == 0
+        if conns.len() as u64 % (std::cmp::max(1, cli.num_users / 5)) == 0
             || conns.len() as u64 == cli.num_users
         {
             // approximate, we may have opened more if they complet out of order
@@ -164,13 +164,15 @@ async fn one_client(
         cli.think_time_s.map(|λ| Exp::new(1.0 / λ)).transpose()?;
     let mut deadline = Instant::now();
     let authority = cli.url.authority().expect("url has hostname");
-    let message: Vec<u8> = {
+    let message: Vec<u8> = { // consumer expects UTF-8
         let mut message = Vec::with_capacity(cli.payload_size_bytes);
         // < 2^16 connections, because of IPv6 limits
-        let bytes = (user_id as u16).to_be_bytes();
-        for _ in 0..cli.payload_size_bytes / 2 {
-            message.push(bytes[0]);
-            message.push(bytes[1]);
+        let repeated = format!("{user_id}.");
+        while message.len() < cli.payload_size_bytes {
+            message.extend(repeated.as_bytes())
+        }
+        while message.len() < cli.payload_size_bytes {
+            message.extend("=".as_bytes());
         }
         message
     };
