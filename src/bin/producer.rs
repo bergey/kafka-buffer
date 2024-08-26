@@ -66,7 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         request_max_size: env::var("REQUEST_MAX_SIZE")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(2 ^ 20),
+            .unwrap_or(1 << 20),
         topics_map,
     }));
 
