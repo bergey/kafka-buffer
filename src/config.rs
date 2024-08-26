@@ -1,5 +1,6 @@
 use pest::Parser;
 use pest_derive::Parser;
+use pest::iterators::Pair;
 use std::collections::HashMap;
 
 #[derive(Parser)]
@@ -11,6 +12,8 @@ pub struct Route {
     pub job_class: String,
     pub queue: String,
     pub topic: String,
+    /// http headers to pass through kafka to Sidekiq
+    pub headers: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -90,6 +93,7 @@ pub fn parse(s: &str) -> Result<Routes, Vec<String>> {
                     let mut class: Option<String> = None;
                     let mut queue: Option<String> = None;
                     let mut topic: Option<String> = None;
+                    let mut headers: Vec<String> = Vec::new();
                     for attr in attr_set.into_inner() {
                         if attr.as_rule() != Rule::pair {
                             let (line, col) = attr.line_col();
@@ -113,46 +117,45 @@ pub fn parse(s: &str) -> Result<Routes, Vec<String>> {
                             key.as_rule()
                         ));
                         }
-                        if value.as_rule() != Rule::string {
-                            let (line, col) = key.line_col();
-                            errors.push(format!(
-                                "{}: {} each attribute must end with a string.  found <{:?}>",
-                                line,
-                                col,
-                                value.as_rule()
-                            ));
-                        }
                         match key.as_str() {
-                            "job-class" => match class {
-                                None => class = value.into_inner().next().map(|v| v.as_str().to_owned()),
-                                Some(_) => {
-                                    let (line, col) = key.line_col();
-                                    errors.push(format!(
-                                        "{}:{} duplicate attribute job-class",
-                                        line, col
-                                    ))
+                            "job-class" => {
+                                expect_string(&value, &mut errors);
+                                match class {
+                                    None => class = value.into_inner().next().map(|v| v.as_str().to_owned()),
+                                    Some(_) => errors.push(error_duplicate(&key, "job-class")),
                                 }
                             },
-                            "queue" => match queue {
-                                None => queue = value.into_inner().next().map(|v| v.as_str().to_owned()),
-                                Some(_) => {
-                                    let (line, col) = key.line_col();
-                                    errors
-                                        .push(format!("{}:{} duplicate attribute queue", line, col))
+                            "queue" => {
+                                expect_string(&value, &mut errors);
+                                match queue {
+                                    None => queue = value.into_inner().next().map(|v| v.as_str().to_owned()),
+                                    Some(_) => errors.push(error_duplicate(&key, "queue")),
                                 }
                             },
-                            "topic" => match topic {
-                                None => topic = value.into_inner().next().map(|v| v.as_str().to_owned()),
-                                Some(_) => {
-                                    let (line, col) = key.line_col();
-                                    errors
-                                        .push(format!("{}:{} duplicate attribute topic", line, col))
+                            "topic" => {
+                                expect_string(&value, &mut errors);
+                                match topic {
+                                    None => topic = value.into_inner().next().map(|v| v.as_str().to_owned()),
+                                    Some(_) => errors.push(error_duplicate(&key, "topic")),
+                                }
+                            },
+                            "headers" => {
+                                if value.as_rule() != Rule::list {
+                                    let (line, col) = value.line_col();
+                                    errors.push(format!("{}:{} headers must be a list of strings found<{:?}>", line, col, value.as_rule()));
+                                }
+                                for h in value.into_inner() {
+                                    if h.as_rule() != Rule::string {
+                                        let (line, col) = h.line_col();
+                                        errors.push(format!("{}: {} each header must be a string.  found {}", line, col, h.as_str()));
+                                    }
+                                    headers.push(h.into_inner().next().unwrap().as_str().to_owned());
                                 }
                             },
                             k => {
                                 let (line, col) = key.line_col();
                                 errors.push(format!(
-                                    "{}:{} valid attributes are job-class, queue, topic.  got {}",
+                                    "{}:{} valid attributes are job-class, queue, topic, headers.  got {}",
                                     line, col, k
                                 ));
                             }
@@ -166,6 +169,7 @@ pub fn parse(s: &str) -> Result<Routes, Vec<String>> {
                                 job_class: c,
                                 queue: q,
                                 topic,
+                                headers, // TODO
                             },
                         );
                     }
@@ -181,6 +185,23 @@ pub fn parse(s: &str) -> Result<Routes, Vec<String>> {
     } else {
         Err(errors)
     }
+}
+
+fn expect_string(value: &Pair<Rule>, errors: &mut Vec<String>) {
+    if value.as_rule() != Rule::string {
+        let (line, col) = value.line_col();
+        errors.push(format!(
+            "{}: {} each attribute must end with a string.  found <{:?}>",
+            line,
+            col,
+            value.as_rule()
+        ));
+    }
+}
+
+fn error_duplicate(key: &Pair<Rule>, name: &str) -> String {
+    let (line, col) = key.line_col();
+    format!("{}:{} duplicate attribute {}", line, col, name)
 }
 
 /// print errors and exit, or return valid Routes
