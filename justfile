@@ -3,7 +3,7 @@ docker: kafka redis
 kafka: docker-start
     docker run -d -p 9092:9092 apache/kafka-native:3.8.0 || true
     kafka_2.13-3.8.0/bin/kafka-topics.sh --create --topic  foo_topic --bootstrap-server localhost:9092 || true
-    kafka_2.13-3.8.0/bin/kafka-topics.sh --create --topic  bar_queue_name__Bar --bootstrap-server localhost:9092 || true
+    kafka_2.13-3.8.0/bin/kafka-topics.sh --create --topic  bar_queue__Bar --bootstrap-server localhost:9092 || true
 
 redis: docker-start
     docker run -d -p 6379:6379 redis
