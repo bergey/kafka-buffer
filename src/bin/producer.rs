@@ -2,9 +2,12 @@
 use kafka_buffer::config::*;
 use kafka_buffer::observability;
 use kafka_buffer::observability::hist_time_since;
+pub mod buffered_http_request_capnp {
+    include!(concat!(env!("OUT_DIR"), "/buffered_http_request_capnp.rs"));
+}
+use crate::buffered_http_request_capnp::buffered_request;
 
 use anyhow::Context;
-use std::collections::HashMap;
 use std::env;
 use std::time::Instant;
 use tracing::*;
@@ -17,6 +20,7 @@ use rdkafka::producer::{FutureProducer, FutureRecord};
 
 use http_body_util::{BodyExt, Empty};
 use hyper::body::Bytes;
+use hyper::header::{HeaderMap, HeaderName};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
@@ -28,7 +32,7 @@ use tokio::net::TcpListener;
 struct Config {
     kafka_url: String,
     request_max_size: usize,
-    topics_map: HashMap<String, String>,
+    topics_map: Routes,
 }
 
 lazy_static! {
@@ -60,7 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .unwrap_or(SocketAddr::from(([0, 0, 0, 0], 9000)));
 
     let config_file_name = env::var("CONFIG_FILE").unwrap_or(DEFAULT_CONFIG_FILE.to_string());
-    let topics_map = parse_from_file(&config_file_name).only_topics();
+    let topics_map = parse_from_file(&config_file_name);
     let config: &'static Config = Box::leak(Box::new(Config {
         kafka_url: env::var("KAFKA_URL").unwrap_or("localhost:9092".to_string()),
         request_max_size: env::var("REQUEST_MAX_SIZE")
@@ -83,14 +87,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let write_to_kafka = |req: Request<hyper::body::Incoming>| async {
         let path = req.uri().path();
-        match config.topics_map.get(path) {
+        match config.topics_map.0.get(path) {
             None => {
                 HTTP_4xx.inc();
                 // I'd like to know which unknown URLs are requested, but not flood our logs
                 empty_http_response(StatusCode::NOT_FOUND)
             }
-            Some(topic) => {
-                let body = http_body_util::Limited::new(req.into_body(), config.request_max_size);
+            Some(route) => {
+                let (headers, body) = {
+                    let (parts, body) = req.into_parts();
+                    let body = http_body_util::Limited::new(body, config.request_max_size);
+                    (parts.headers, body)
+                };
                 match body.collect().await {
                     Err(err) => {
                         error!("http error: {:?}", err);
@@ -98,10 +106,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         empty_http_response(StatusCode::BAD_REQUEST)
                     }
                     Ok(all) => {
-                        let mut v: Vec<u8> = Vec::new();
-                        v.extend(all.to_bytes().as_ref());
+                        let payload = encode_request(&all.to_bytes(), &headers, &route.headers);
                         let start = Instant::now();
-                        match producer.send_result(FutureRecord::<(), [u8]>::to(&topic).payload(&v))
+                        match producer.send_result(FutureRecord::<(), [u8]>::to(&route.topic).payload(&payload))
                         {
                             Err(err) => {
                                 warn!("could not enqueue in rdkafka: {:?}", err);
@@ -123,7 +130,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                                         empty_http_response(StatusCode::SERVICE_UNAVAILABLE)
                                     }
                                     Ok(Ok((partition, offset))) => {
-                                        debug!("served request topic={topic} partition={partition} offset={offset}");
+                                        debug!("served request topic={} partition={partition} offset={offset}", route.topic);
                                         HTTP_200.inc();
                                         empty_http_response(StatusCode::OK)
                                     }
@@ -197,4 +204,21 @@ fn empty_http_response(status_code: StatusCode) -> Result<Response<Empty<Bytes>>
     Ok(Response::builder()
         .status(status_code)
         .body(Empty::<Bytes>::new())?)
+}
+
+fn encode_request(body: &[u8], headers: &HeaderMap, want: &Vec<HeaderName>) -> Vec<u8> {
+    let mut message = ::capnp::message::Builder::new_default();
+    let mut req = message.init_root::<buffered_request::Builder>();
+    req.set_body(body);
+    let mut hh = req.reborrow().init_headers(want.len().try_into().unwrap());
+    for (i, name) in want.iter().enumerate() {
+        if let Some(value) = headers.get(name) {
+            hh.reborrow().get(i as u32).set_name(name);
+            hh.reborrow().get(i as u32).set_value(value.as_bytes());
+        }
+    }
+    let mut ret = Vec::new();
+    // docs say: If you pass in a writer that never returns an error, then this function will never return an error.
+    let _ = capnp::serialize::write_message(&mut ret, &message);
+    ret
 }

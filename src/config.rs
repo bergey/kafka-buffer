@@ -21,14 +21,6 @@ pub struct Route {
 pub struct Routes(pub HashMap<String, Route>);
 
 impl Routes {
-    pub fn only_topics(self) -> HashMap<String, String> {
-        let mut ret = HashMap::new();
-        for (path, route) in self.0 {
-            ret.insert(path, route.topic);
-        }
-        ret
-    }
-
     pub fn by_topic(self) -> HashMap<String, Route> {
         let mut ret = HashMap::new();
         for route in self.0.into_values() {
