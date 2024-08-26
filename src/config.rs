@@ -2,6 +2,7 @@ use pest::Parser;
 use pest_derive::Parser;
 use pest::iterators::Pair;
 use std::collections::HashMap;
+use hyper::header::HeaderName;
 
 #[derive(Parser)]
 #[grammar = "config.pest"]
@@ -13,7 +14,7 @@ pub struct Route {
     pub queue: String,
     pub topic: String,
     /// http headers to pass through kafka to Sidekiq
-    pub headers: Vec<String>,
+    pub headers: Vec<HeaderName>,
 }
 
 #[derive(Clone, Debug)]
@@ -93,7 +94,7 @@ pub fn parse(s: &str) -> Result<Routes, Vec<String>> {
                     let mut class: Option<String> = None;
                     let mut queue: Option<String> = None;
                     let mut topic: Option<String> = None;
-                    let mut headers: Vec<String> = Vec::new();
+                    let mut headers: Vec<HeaderName> = Vec::new();
                     for attr in attr_set.into_inner() {
                         if attr.as_rule() != Rule::pair {
                             let (line, col) = attr.line_col();
@@ -149,7 +150,12 @@ pub fn parse(s: &str) -> Result<Routes, Vec<String>> {
                                         let (line, col) = h.line_col();
                                         errors.push(format!("{}: {} each header must be a string.  found {}", line, col, h.as_str()));
                                     }
-                                    headers.push(h.into_inner().next().unwrap().as_str().to_owned());
+                                    let (line, col) = h.line_col();
+                                    let s = h.into_inner().next().unwrap().as_str();
+                                    match HeaderName::from_bytes(s.as_bytes()) {
+                                        Ok(header_name) => headers.push(header_name),
+                                        Err(_) => errors.push(format!("{}:{} invalid header name {}", line, col, s)),
+                                    }
                                 }
                             },
                             k => {
@@ -169,7 +175,7 @@ pub fn parse(s: &str) -> Result<Routes, Vec<String>> {
                                 job_class: c,
                                 queue: q,
                                 topic,
-                                headers, // TODO
+                                headers,
                             },
                         );
                     }
