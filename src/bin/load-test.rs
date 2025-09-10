@@ -9,7 +9,7 @@ use hyper::client::conn::http1::SendRequest;
 use hyper::{Request, StatusCode};
 use hyper_util::rt::TokioIo;
 use prometheus::{self, labels, Histogram, IntCounter, IntCounterVec};
-use rand::prelude::*;
+use rand::rng;
 use rand_distr::{Distribution, Exp};
 use tokio::net::TcpStream;
 use tokio::spawn;
@@ -219,7 +219,7 @@ async fn one_client(
         // read until deadline or we've drained the queue
         match think_distribution {
             Some(think) => {
-                let think_s = think.sample(&mut thread_rng());
+                let think_s = think.sample(&mut rng());
                 deadline += Duration::from_secs_f64(think_s);
                 sleep_until(deadline).await;
             }

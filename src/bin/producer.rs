@@ -125,8 +125,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                                         HTTP_5xx.inc();
                                         empty_http_response(StatusCode::SERVICE_UNAVAILABLE)
                                     }
-                                    Ok(Ok((partition, offset))) => {
-                                        debug!("served request topic={} partition={partition} offset={offset}", route.topic);
+                                    Ok(Ok(delivery)) => {
+                                        debug!("served request topic={} partition={} offset={}", route.topic, delivery.partition, delivery.offset);
                                         HTTP_200.inc();
                                         empty_http_response(StatusCode::OK)
                                     }
