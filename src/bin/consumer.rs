@@ -92,21 +92,46 @@ async fn main() -> anyhow::Result<()> {
     let config_file_name = env::var("CONFIG_FILE").unwrap_or(DEFAULT_CONFIG_FILE.to_string());
     let topics_map = parse_from_file(&config_file_name).by_topic();
 
-    // Create the `StreamConsumer`, to receive the messages from the topic in form of a `Stream`.
-    let consumer: StreamConsumer = ClientConfig::new()
-        .set("group.id", "kafka-buffer")
-        .set("bootstrap.servers", &kafka_url)
-        .set("enable.partition.eof", "false")
-        .set("session.timeout.ms", "6000")
-        .set("enable.auto.commit", "false")
-        .create()
-        .context("kafka consumer")?;
-    let topics: Vec<&str> = topics_map.keys().map(|x| &**x).collect();
-    info!("subscribing to {:?}", topics);
-    consumer.subscribe(&topics)?;
-
     let redis_pool = create_redis_pool().context("redis_pool")?;
-    let sidekiq_client = Client::new(redis_pool, Default::default());
+
+    // each topic on own task so they can block on full Sidekiq queue independently
+    for (topic, route) in topics_map.into_iter() {
+        info!("subscribing to {topic}");
+        let sidekiq_client = Client::new(redis_pool.clone(), Default::default());
+        let kafka_url = kafka_url.clone();
+        // let topic = (**topic).to_string();
+        
+        tokio::task::spawn(async move {
+            // Create the `StreamConsumer`, to receive the messages from the topic in form of a `Stream`.
+            let consumer: StreamConsumer = ClientConfig::new()
+                .set("group.id", "kafka-buffer")
+                .set("bootstrap.servers", &kafka_url)
+                .set("enable.partition.eof", "false")
+                .set("session.timeout.ms", "6000")
+                .set("enable.auto.commit", "false")
+                .create()
+                .context("kafka consumer")?;
+
+            consumer.subscribe(&[&topic])?;
+
+            loop {
+                match consumer.recv().await {
+                    Err(err) => {
+                        error!("kafka read error: {}", err);
+                        break;
+                    }
+                    Ok(message) => {
+                        match write_sidekiq_job(&consumer, &sidekiq_client, &route, message).await {
+                            Ok(()) => (),
+                            Err(_) => std::process::exit(101),
+                        }
+                    }
+                }
+            }
+            Ok::<(), anyhow::Error>(())
+        });
+    }
+
     let metrics_listener = TcpListener::bind(metrics_address)
         .await
         .context("metrics_listener")?;
@@ -114,40 +139,24 @@ async fn main() -> anyhow::Result<()> {
     // Create the outer pipeline on the message stream.
     info!("Starting event loop");
     loop {
-        tokio::select! {
-            r_message = consumer.recv() => match r_message {
-                Err(err) => {
-                    error!("kafka read error: {}", err);
-                    break;
-                }
-                Ok(message) => {
-                    let route = topics_map.get(message.topic()).expect("message came from a topic we subscribed to");
-                    match write_sidekiq_job(&consumer, &sidekiq_client, &route, message).await {
-                        Ok(()) => (),
-                        Err(_) => break,
-                    }
-                }
-            },
-            r_stream = metrics_listener.accept() => match r_stream {
-                Err(err) => {
-                    error!("http error: {}", err);
-                    break;
-                }
-                Ok((stream, _)) => {
-                    let io = TokioIo::new(stream);
-                    tokio::task::spawn(async move {
-                        if let Err(err) = http1::Builder::new()
-                            .serve_connection(io, service_fn(observability::prometheus_metrics))
-                            .await
-                        {
-                            error!("Error serving connection: {:?}", err);
-                        }
-                    });
-                }
+        match metrics_listener.accept().await {
+            Err(err) => {
+                error!("http error: {}", err);
+                break;
             }
-        };
+            Ok((stream, _)) => {
+                let io = TokioIo::new(stream);
+                tokio::task::spawn(async move {
+                    if let Err(err) = http1::Builder::new()
+                        .serve_connection(io, service_fn(observability::prometheus_metrics))
+                        .await
+                    {
+                        error!("Error serving connection: {:?}", err);
+                    }
+                });
+            }
+        }
     }
-    warn!("Stream processing terminated");
     Ok(())
 }
 
