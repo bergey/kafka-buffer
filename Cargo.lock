@@ -1009,7 +1009,7 @@ dependencies = [
  "rand",
  "rand_distr",
  "rdkafka",
- "redis 0.32.5",
+ "redis",
  "serde",
  "serde_json",
  "sidekiq",
@@ -1621,15 +1621,16 @@ dependencies = [
 
 [[package]]
 name = "redis"
-version = "0.29.5"
+version = "0.32.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1bc42f3a12fd4408ce64d8efef67048a924e543bd35c6591c0447fda9054695f"
+checksum = "7cd3650deebc68526b304898b192fa4102a4ef0b9ada24da096559cb60e0eef8"
 dependencies = [
  "arc-swap",
  "async-native-tls",
  "async-std",
  "backon",
  "bytes",
+ "cfg-if",
  "combine",
  "futures-channel",
  "futures-util",
@@ -1640,25 +1641,9 @@ dependencies = [
  "pin-project-lite",
  "ryu",
  "sha1_smol",
- "socket2 0.5.7",
+ "socket2 0.6.0",
  "tokio",
  "tokio-util",
- "url",
-]
-
-[[package]]
-name = "redis"
-version = "0.32.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7cd3650deebc68526b304898b192fa4102a4ef0b9ada24da096559cb60e0eef8"
-dependencies = [
- "combine",
- "itoa",
- "num-bigint",
- "percent-encoding",
- "ryu",
- "sha1_smol",
- "socket2 0.6.0",
  "url",
 ]
 
@@ -1860,12 +1845,11 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 [[package]]
 name = "sidekiq"
 version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a6318c05b6fa7def01f6aba6fc8258d7df4d896e6aa02a8a0fabe578a4e2f94"
+source = "git+https://github.com/bergey/rust-sidekiq.git?branch=kafka-buffer#502f2110c021973e87ea349f905178e31cef91f0"
 dependencies = [
  "futures",
  "rand",
- "redis 0.29.5",
+ "redis",
  "serde",
  "serde_json",
  "time",

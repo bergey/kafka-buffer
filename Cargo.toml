@@ -25,7 +25,7 @@ rdkafka = "0.38.0"
 redis = "0.32.5"
 serde = "1.0.209"
 serde_json = "1.0.127"
-sidekiq = "0.13.0"
+sidekiq = { git = 'https://github.com/bergey/rust-sidekiq.git', branch = 'kafka-buffer' }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "fmt", "json"] }
