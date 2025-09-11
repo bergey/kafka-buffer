@@ -22,9 +22,12 @@ use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
+use tokio::time::Duration;
 
 #[macro_use]
 extern crate lazy_static;
+
+const MAX_SQ_QUEUE_SIZE: i64 = 100; // TODO from config
 
 lazy_static! {
     static ref KAFKA_MESSAGE_RECEIVED: IntCounter =
@@ -40,7 +43,7 @@ async fn write_sidekiq_job<'a>(
     sidekiq_client: &Client,
     route: &Route,
     message: BorrowedMessage<'a>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<i64> {
     let job_opts = JobOpts {
         queue: route.queue.clone(),
         ..Default::default()
@@ -50,7 +53,7 @@ async fn write_sidekiq_job<'a>(
     match decode_capnp_message(message.payload()) {
         Err(err) => {
             error!("skipping topic={} offset={} could not decode payload: {}", message.topic(), message.offset(), err);
-            Ok(())
+            Ok(-2)
         }
         Ok(job_args) => {
             debug!("received topic={} job_args={:?}", message.topic(), job_args);
@@ -67,14 +70,14 @@ async fn write_sidekiq_job<'a>(
             let r_push = sidekiq_client.push_async(job).await;
             hist_time_since(&REDIS_DURATION_S, start);
             match r_push {
-                Ok(_) => {
+                Ok(len) => {
                     JOBS_WRITTEN.inc();
                     consumer.commit_consumer_state(CommitMode::Async)?;
-                    Ok(())
+                    Ok(len)
                 }
                 Err(err) => {
                     error!("Sidekiq push failed: {}", err);
-                    Ok(()) // no commit, try again on next recv?
+                    Ok(-1) // no commit, try again on next recv?
                 }
             }
         }
@@ -97,6 +100,7 @@ async fn main() -> anyhow::Result<()> {
     // each topic on own task so they can block on full Sidekiq queue independently
     for (topic, route) in topics_map.into_iter() {
         info!("subscribing to {topic}");
+        let mut redis_pool = redis_pool.clone();
         let sidekiq_client = Client::new(redis_pool.clone(), Default::default());
         let kafka_url = kafka_url.clone();
         // let topic = (**topic).to_string();
@@ -114,18 +118,26 @@ async fn main() -> anyhow::Result<()> {
 
             consumer.subscribe(&[&topic])?;
 
+            let mut sidekiq_queue_size = i64::MAX;
+
             loop {
-                match consumer.recv().await {
-                    Err(err) => {
-                        error!("kafka read error: {}", err);
-                        break;
-                    }
-                    Ok(message) => {
-                        match write_sidekiq_job(&consumer, &sidekiq_client, &route, message).await {
-                            Ok(()) => (),
-                            Err(_) => std::process::exit(101),
+                if sidekiq_queue_size < MAX_SQ_QUEUE_SIZE {
+                    match consumer.recv().await {
+                        Err(err) => {
+                            error!("kafka read error: {}", err);
+                            break;
+                        }
+                        Ok(message) => {
+                            match write_sidekiq_job(&consumer, &sidekiq_client, &route, message).await {
+                                Ok(len) => sidekiq_queue_size = len,
+                                Err(_) => std::process::exit(101),
+                            }
                         }
                     }
+                } else {
+                    let dt = Duration::from_millis(rand::random_range(50..=150));
+                    tokio::time::sleep(dt).await;
+                    sidekiq_queue_size = redis::cmd("LLEN").arg(&route.queue).query_async(&mut redis_pool).await?;
                 }
             }
             Ok::<(), anyhow::Error>(())
